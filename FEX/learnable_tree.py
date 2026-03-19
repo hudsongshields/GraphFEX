@@ -14,10 +14,17 @@ class LeafMLP(nn.Module):
     def __init__(self, input_dim):
         super().__init__()
         self.logits = nn.Parameter(torch.randn(input_dim) * 0.01)
+        self.register_buffer("tau", torch.tensor(0.5, dtype=torch.float32))
     
     def forward(self, x: torch.Tensor):
-        weights = F.gumbel_softmax(self.logits, dim=-1, hard=True)
+        weights = F.gumbel_softmax(self.logits, dim=-1, hard=True, tau=float(self.tau.item()))
         return (weights * x).sum(dim=-1, keepdim=True)
+
+    def set_tau(self, tau: float):
+        self.tau.fill_(max(float(tau), 1e-3))
+
+    def get_tau(self):
+        return float(self.tau.item())
     
     def selected_dim(self):
         return int(self.logits.argmax().item())
@@ -81,6 +88,15 @@ class FEX(nn.Module):
         super().to(device)
         self.parent_node.to(device)
         return self
+
+    def set_leaf_tau(self, tau: float):
+        for leaf_mlp in self.leaf_mlps:
+            leaf_mlp.set_tau(tau)
+
+    def get_leaf_tau(self):
+        if len(self.leaf_mlps) == 0:
+            return None
+        return self.leaf_mlps[0].get_tau()
     
     def visualize_tree(self, filename=None, format="png"):
         leaf_transforms=[]

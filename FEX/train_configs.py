@@ -31,6 +31,9 @@ class FEXConfig():
     num_leaves: int = 2
     bfgs_lr: float = 1e-4
     max_norm: float = 1.0
+    tau_start: float = 1.0
+    tau_end: float = 0.1
+    tau_anneal_epochs: int = 10
 
 
 runtimeconfig = RunTimeConfig()
