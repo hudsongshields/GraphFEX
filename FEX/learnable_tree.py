@@ -3,7 +3,6 @@ __all__ = ["FEX"]
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from .nodes import Node
 from .tree_configs import TREE_CONFIGS, get_tree_config
 
@@ -13,18 +12,22 @@ tree_logger = logging.getLogger("debug_tree")
 class LeafMLP(nn.Module):
     def __init__(self, input_dim):
         super().__init__()
-        self.logits = nn.Parameter(torch.randn(input_dim) * 0.01)
+        self.linear = nn.Linear(input_dim, 1)
     
     def forward(self, x: torch.Tensor):
-        weights = F.gumbel_softmax(self.logits, dim=-1, hard=True)
-        return (weights * x).sum(dim=-1, keepdim=True)
-    
-    def selected_dim(self):
-        return int(self.logits.argmax().item())
+        return self.linear(x)
 
-    def selection_confidence(self):
-        probs = torch.softmax(self.logits.detach(), dim=-1)
-        return float(probs.max().item())
+    def expression(self):
+        weights = self.linear.weight.detach().flatten().tolist()
+        bias = float(self.linear.bias.detach().item())
+
+        terms = []
+        for i, w in enumerate(weights):
+            sign = "+" if w >= 0 else "-"
+            terms.append(f"{sign} {abs(w):.3f}*X_{i}")
+
+        bias_sign = "+" if bias >= 0 else "-"
+        return " ".join(terms) + f" {bias_sign} {abs(bias):.3f}"
     
 
 class FEX(nn.Module):
@@ -85,9 +88,7 @@ class FEX(nn.Module):
     def visualize_tree(self, filename=None, format="png"):
         leaf_transforms=[]
         for leaf_idx, leaf_mlp in enumerate(self.leaf_mlps):
-            selected_dim = leaf_mlp.selected_dim()
-            confidence = leaf_mlp.selection_confidence()
-            mlp_str = f"leaf{leaf_idx}: X_{selected_dim} (p={confidence:.2f})"
+            mlp_str = f"leaf{leaf_idx}: {leaf_mlp.expression()}"
             leaf_transforms.append(mlp_str)
 
         return self.parent_node.visualize_tree_inorder(
