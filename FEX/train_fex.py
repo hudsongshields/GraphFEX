@@ -21,6 +21,12 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     best_inter_tree = None
 
     for epoch in range(config.num_epochs):
+        anneal_epochs = max(int(config.tau_anneal_epochs), 1)
+        progress = min(epoch / max(anneal_epochs - 1, 1), 1.0)
+        current_tau = config.tau_start + (config.tau_end - config.tau_start) * progress
+        forcing_tree.set_leaf_tau(current_tau)
+        inter_dynam_tree.set_leaf_tau(current_tau)
+
         epoch_loss = 0.0
         # batching for SGD
         for batch_x, batch_dy_val in dataloader:
@@ -83,7 +89,7 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             best_epoch_loss = epoch_loss
             best_forcing_tree = forcing_tree.copy_inorder()
             best_inter_tree = inter_dynam_tree.copy_inorder()
-        train_logger.debug(f"Adam Epoch {epoch+1}/{config.num_epochs}, Loss: {epoch_loss:.4f}")
+        train_logger.debug(f"Adam Epoch {epoch+1}/{config.num_epochs}, Tau: {current_tau:.4f}, Loss: {epoch_loss:.4f}")
     train_logger.debug(f"param forcing tree: {[param.detach().cpu().numpy() for param in forcing_tree.tree_params()]}")
     train_logger.debug(f"param inter tree: {[param.detach().cpu().numpy() for param in inter_dynam_tree.tree_params()]}")
 
