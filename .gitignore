@@ -1,12 +1,11 @@
-git init -b main
-echo "__pycache__/
+__pycache__/
 *.pyc
 .venv/
 .env
 .vscode/
-*.log
 .DS_Store
 data/
 logs/
 *.csv
-*.pt" > .gitignore
+*.log
+FEX/training/testing/
