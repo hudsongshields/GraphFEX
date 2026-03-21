@@ -34,7 +34,6 @@ class RunTimeConfig:
 
 
 
-
 @dataclass
 class ControllerConfig():
     input_dim: int = 10
@@ -53,8 +52,8 @@ class FEXConfig():
     max_nodes: int = 20
     leaf_dim: int = 1
     num_leaves: int = 2
-    bfgs_lr: float = 1e-4
-    max_norm: float = 1.0
+    bfgs_lr: float = 0.1
+    
     tau_start: float = 1.0
     tau_end: float = 0.1
     tau_anneal_epochs: int = 10
