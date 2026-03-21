@@ -41,7 +41,7 @@ if __name__ == "__main__":
     Node 3: Leaf
     Node 4: Leaf
     """
-    ops_per_node = [BINARY_OPS, UNARY_OPS, UNARY_OPS]
+    ops_per_node = [len(BINARY_OPS), len(UNARY_OPS), len(UNARY_OPS)]
     CONTROLLER_INPUT = torch.zeros(10)
     controller = Controller(input_size=len(CONTROLLER_INPUT), ops_per_node=ops_per_node, hidden_size=20)
     

@@ -1,8 +1,9 @@
-from argparse import __all__
+
 __all__ = ["FEX"]
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from .nodes import Node
 from ..utils.tree_configs import TREE_CONFIGS, get_tree_config
 
@@ -13,7 +14,7 @@ class LeafMLP(nn.Module):
     def __init__(self, input_dim):
         super().__init__()
         self.logits = nn.Parameter(torch.randn(input_dim) * 0.01)
-        self.register_buffer("tau", torch.tensor(0.5, dtype=torch.float32))
+        self.register_buffer("tau", torch.tensor(5.0, dtype=torch.float32))
     
     def forward(self, x: torch.Tensor):
         weights = F.gumbel_softmax(self.logits, dim=-1, hard=True, tau=float(self.tau.item()))
@@ -31,6 +32,13 @@ class LeafMLP(nn.Module):
     def selection_confidence(self):
         probs = torch.softmax(self.logits.detach(), dim=-1)
         return float(probs.max().item())
+
+    def expression(self):
+        selected_dim = self.selected_dim()
+        confidence = self.selection_confidence()
+        if selected_dim == self.logits.shape[0] - 1:
+            return f"1 (bias, conf: {confidence:.2f})"
+        return f"x[{selected_dim}] (conf: {confidence:.2f})"
     
 
 class FEX(nn.Module):

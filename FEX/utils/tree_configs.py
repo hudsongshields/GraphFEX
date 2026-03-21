@@ -1,4 +1,4 @@
-from ast import List
+from typing import List, Callable
 from dataclasses import dataclass
 
 from ..models.nodes import Node
@@ -121,7 +121,7 @@ def ops_per_depth_4():
 
 @dataclass 
 class TreeConfig:
-    tree_func: callable
+    tree_func: Callable
     ops_per_node: List
     num_leaves:int
 
