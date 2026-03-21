@@ -1,12 +1,12 @@
-from .tree_configs import TreeConfig
+from ..utils.tree_configs import TreeConfig
 
-from .controllers import Controller
-from .learnable_tree import FEX
-from .nodes import Node
-from .helpers.sampler import epsilon_greedy_sample
+from ..models.controllers import Controller
+from ..models.learnable_tree import FEX
+from ..models.nodes import Node
+from ..utils.sampler import epsilon_greedy_sample
 from .train_fex import train_network_fex
 from .train_configs import ControllerConfig, FEXConfig, runtimeconfig
-from .helpers.pools import GraphPoolCandidate, GraphPool
+from ..utils.pools import GraphPoolCandidate, GraphPool
 
 from typing import Callable
 import torch
@@ -15,9 +15,11 @@ import math
 
 import logging
 train_logger = logging.getLogger("train_logger") 
+train_logger.setLevel(logging.INFO)
 
 
-def train_network_controller(tree_structure: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, train_logger=train_logger):
+def train_network_controller(tree_structure: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig):
+    train_logger = runtimeconfig.train_logger
     controller = Controller(
         ops_per_node=tree_structure.ops_per_node,
         num_trees=config.num_trees,
@@ -27,20 +29,25 @@ def train_network_controller(tree_structure: TreeConfig, dataloader, adj_matrix,
     
     optimizer = torch.optim.Adam(controller.parameters(), lr=config.lr)
     controller_input = torch.zeros(config.input_dim).to(runtimeconfig.device)
-    scheduler = lr_scheduler.ReduceLROnPlateau(
+    scheduler = lr_scheduler.CosineAnnealingLR(
         optimizer,
-        mode="min",
-        factor=0.5,
-        patience=max(3, int(config.num_epochs * 0.1)),
-        min_lr=max(1e-5, config.lr * 0.05),
+        T_max=config.num_epochs,
+        eta_min=max(1e-5, config.lr * 0.005),
     )
+    
+    fex_kwargs = {
+        "leaf_dim": fex_config.leaf_dim,
+        "num_leaves": fex_config.num_leaves,
+        "tree_structure": tree_structure,
+    }
+    inter_fex_kwargs = fex_kwargs.copy()
+    inter_fex_kwargs["leaf_dim"] = fex_config.leaf_dim * 2
 
     adj_matrix = adj_matrix.to(runtimeconfig.device)
 
     best_candidates = GraphPool(pool_size=5)
     for epoch in range(config.num_epochs):
         optimizer.zero_grad()
-
         num_cands = config.num_cands_per_epoch
         threshold = config.percentile_threshold
         thresh_idx = int(threshold * num_cands)
@@ -50,30 +57,29 @@ def train_network_controller(tree_structure: TreeConfig, dataloader, adj_matrix,
 
         for k_cand in range(num_cands):
             op_indices = epsilon_greedy_sample(pmfs, epsilon=0.1).squeeze(0) # (num_nodes,)
-            # pmfs is a list of (1, num_ops) tensors, one per node
             chosen_probs = torch.stack([pmfs[i].squeeze(0)[op_indices[i]] for i in range(len(op_indices))])
-            log_prob = torch.log(chosen_probs + 1e-8).sum()
+            log_prob = torch.log(chosen_probs).sum()
             log_probs.append(log_prob)
 
-            # Split sampled indices to create seperate sequences for each FEX (forcing and interaction-dynamics)
+            # Split sampled indices to create seperate sequences for each FEX (forcing and interaction dynamics)
             inter_dynam_op_indices = op_indices[len(op_indices) // 2:]
             forcing_op_indices = op_indices[:len(op_indices) // 2]
-            inter_fex = FEX(leaf_dim=fex_config.leaf_dim, num_leaves=tree_structure.num_leaves, sample_indices=inter_dynam_op_indices, tree_structure=tree_structure).to(runtimeconfig.device)
-            forcing_fex = FEX(leaf_dim=fex_config.leaf_dim, num_leaves=tree_structure.num_leaves, sample_indices=forcing_op_indices, tree_structure=tree_structure).to(runtimeconfig.device)
+
+            inter_fex = FEX(sample_indices=inter_dynam_op_indices, **inter_fex_kwargs).to(runtimeconfig.device)
+            forcing_fex = FEX(sample_indices=forcing_op_indices, **fex_kwargs).to(runtimeconfig.device)
             score = train_network_fex(
                 forcing_fex,
                 inter_fex,
                 dataloader,
                 adj_matrix,
                 config=fex_config,
-                train_logger=train_logger,
             )
             score = score.detach().item() if isinstance(score, torch.Tensor) else float(score)
             if not math.isfinite(score):
                 reward = 0.0
                 train_logger.warning("Epoch %s, Candidate %s produced non-finite score; assigning zero reward.", epoch, k_cand,)
             else:
-                reward = 1 / (1 + score)
+                reward = 1.0 / math.sqrt(1.0 + score)
             candidate = GraphPoolCandidate(inter_tree=inter_fex, forcing_tree=forcing_fex, reward=reward, id=k_cand)
             top_epoch_cands.add_new(candidate)
             train_logger.info(f"Epoch {epoch}, Candidate {k_cand}, Score: {score:.4f}, Reward: {reward:.4f}")
@@ -83,15 +89,15 @@ def train_network_controller(tree_structure: TreeConfig, dataloader, adj_matrix,
         log_probs_sorted = [log_probs[cand.id] for cand in top_epoch_cands]
 
         thresh_reward = torch.tensor(top_epoch_cands.threshold).to(runtimeconfig.device)
-        train_logger.debug(f"Epoch {epoch}, Reward Threshold for Backprop: {thresh_reward:.4f}")
-        train_logger.debug(f"Epoch {epoch}, Rewards: {rewards.detach().cpu().numpy()}")
-        train_logger.debug(f"Epoch {epoch}, Log Probs: {[lp.detach().cpu().numpy() for lp in log_probs_sorted]}")
         advantage = rewards - thresh_reward
+        # advantage = torch.softmax(advantage / (advantage.std() + 1e-8), dim=0) # Normalize advantages for stability
+        """with torch.no_grad():
+            advantage = torch.softmax(advantage / (advantage.std() + 1e-8), dim=0)"""
         loss = -(advantage * torch.stack(log_probs_sorted)).mean()
 
         loss.backward()
         optimizer.step()
-        scheduler.step(loss.detach().item())
+        scheduler.step()
 
 
         for candidate in top_epoch_cands:
@@ -99,14 +105,18 @@ def train_network_controller(tree_structure: TreeConfig, dataloader, adj_matrix,
 
         
         train_logger.info(f"Controller Epoch {epoch}, Loss: {loss.item()}")
+        train_logger.debug(f"Epoch {epoch}, Reward Threshold for Backprop: {thresh_reward:.4f}")
+        train_logger.debug(f"Epoch {epoch}, Rewards: {rewards.detach().cpu().numpy()}")
+        train_logger.debug(f"Epoch {epoch}, Log Probs: {[lp.detach().cpu().numpy() for lp in log_probs_sorted]}")
+        train_logger.debug(f"Epoch {epoch}, Advantage: {advantage.detach().cpu().numpy()}")
 
     return best_candidates
 
 
 if __name__ == "__main__":
     from torch.utils.data import DataLoader, TensorDataset
-    from .tree_configs import depth_2_tree
-    from .operations import UNARY_OPS, BINARY_OPS
+    from ..utils.tree_configs import depth_2_tree
+    from ..utils.operations import UNARY_OPS, BINARY_OPS
 
 
     # fake data and adjacency matrix for testing

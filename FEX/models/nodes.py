@@ -1,10 +1,9 @@
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
-from typing import Callable, Any, Optional
+from typing import Callable, Optional
 import copy
 from graphviz import Digraph
-from IPython.display import display
 
 
 class UnaryOperation(nn.Module):

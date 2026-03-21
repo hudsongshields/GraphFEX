@@ -3,9 +3,8 @@ __all__ = ["FEX"]
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from .nodes import Node
-from .tree_configs import TREE_CONFIGS, get_tree_config
+from ..utils.tree_configs import TREE_CONFIGS, get_tree_config
 
 import logging
 tree_logger = logging.getLogger("debug_tree")
@@ -101,9 +100,7 @@ class FEX(nn.Module):
     def visualize_tree(self, filename=None, format="png"):
         leaf_transforms=[]
         for leaf_idx, leaf_mlp in enumerate(self.leaf_mlps):
-            selected_dim = leaf_mlp.selected_dim()
-            confidence = leaf_mlp.selection_confidence()
-            mlp_str = f"leaf{leaf_idx}: X_{selected_dim} (p={confidence:.2f})"
+            mlp_str = f"leaf{leaf_idx}: {leaf_mlp.expression()}"
             leaf_transforms.append(mlp_str)
 
         return self.parent_node.visualize_tree_inorder(
@@ -183,8 +180,8 @@ class FEX(nn.Module):
 # ------------ Debug FEX Tree ------------- #
 if __name__ == "__main__":
     from .controllers import Controller
-    from .helpers.sampler import epsilon_greedy_sample
-    from .operations import unary_operation, binary_operation, UNARY_OPS, BINARY_OPS
+    from ..utils.sampler import epsilon_greedy_sample
+    from ..utils.operations import unary_operation, binary_operation, UNARY_OPS, BINARY_OPS
 
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("debug_tree").setLevel(logging.DEBUG) 
