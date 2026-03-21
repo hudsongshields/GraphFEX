@@ -3,7 +3,6 @@ from typing import Callable
 
 
 EPS = 1e-6
-POLY_CLAMP = 5.0
 
 
 def identity(x):
@@ -11,27 +10,27 @@ def identity(x):
 
 
 def square(x):
-    x = torch.clamp(x, min=-POLY_CLAMP, max=POLY_CLAMP)
+    # x = torch.clamp(x, min=-POLY_CLAMP, max=POLY_CLAMP)
     return torch.square(x)
 
 
 def cube(x):
-    x = torch.clamp(x, min=-POLY_CLAMP, max=POLY_CLAMP)
+    # x = torch.clamp(x, min=-POLY_CLAMP, max=POLY_CLAMP)
     return torch.pow(x, 3)
 
 
 def fourth_power(x):
-    x = torch.clamp(x, min=-POLY_CLAMP, max=POLY_CLAMP)
+    # x = torch.clamp(x, min=-POLY_CLAMP, max=POLY_CLAMP)
     return torch.pow(x, 4)
 
 
 def safe_exp(x):
-    # Keep exponential growth bounded enough for stable optimization.
-    return torch.exp(torch.clamp(x, min=-10.0, max=10.0))
+    # x = torch.clamp(x, min=-10.0, max=10.0)
+    return torch.exp(x)
 
 
-def sin(x):
-    return torch.sin(x)
+def sigmoid(x):
+    return torch.sigmoid(x)
 
 
 def safe_reciprocal(x):
@@ -61,7 +60,7 @@ UNARY_OPS = [
     cube,
     fourth_power,
     safe_exp,
-    sin,
+    sigmoid,
     safe_reciprocal,
 ]
 
