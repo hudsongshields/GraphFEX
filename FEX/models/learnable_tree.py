@@ -4,7 +4,7 @@ __all__ = ["FEX"]
 import torch
 import torch.nn as nn
 from .nodes import Node
-from .tree_configs import TREE_CONFIGS, get_tree_config
+from ..utils.tree_configs import TREE_CONFIGS, get_tree_config
 
 import logging
 tree_logger = logging.getLogger("debug_tree")
@@ -168,8 +168,8 @@ class FEX(nn.Module):
 # ------------ Debug FEX Tree ------------- #
 if __name__ == "__main__":
     from .controllers import Controller
-    from .helpers.sampler import epsilon_greedy_sample
-    from .operations import unary_operation, binary_operation, UNARY_OPS, BINARY_OPS
+    from ..utils.sampler import epsilon_greedy_sample
+    from ..utils.operations import unary_operation, binary_operation, UNARY_OPS, BINARY_OPS
 
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("debug_tree").setLevel(logging.DEBUG) 

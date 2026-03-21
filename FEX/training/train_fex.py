@@ -1,21 +1,18 @@
-from .nodes import Node
-from .learnable_tree import FEX
-from typing import Callable
-from .train_configs import FEXConfig, RunTimeConfig
+from ..models.learnable_tree import FEX
+from .train_configs import FEXConfig, runtimeconfig
 import torch
 import math
-from .train_configs import runtimeconfig
 
-def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_matrix, config: FEXConfig, train_logger):
+def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_matrix, config: FEXConfig):
     adam_optim_forcing = torch.optim.Adam(forcing_tree.all_parameters(), lr=config.lr)
     adam_optim_inter = torch.optim.Adam(inter_dynam_tree.all_parameters(), lr=config.lr)
+    train_logger = runtimeconfig.train_logger
     train_logger.debug(f"starting param forcing tree: {[param.detach().cpu().numpy() for param in forcing_tree.tree_params()]}")
     train_logger.debug(f"starting param inter tree: {[param.detach().cpu().numpy() for param in inter_dynam_tree.tree_params()]}")
 
     criterion = torch.nn.MSELoss()
 
     max_nodes = config.max_nodes
-    grad_clip_norm = config.max_norm
     best_epoch_loss = float('inf')
     best_forcing_tree = None
     best_inter_tree = None
@@ -50,30 +47,23 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             for node in range(sparse_adj_matrix.shape[0]):
                 node_input = sparse_batch_x[:, node, :]
                 forcing_output = forcing_tree(node_input)
-                interaction_output = inter_dynam_tree(node_input)
-                interaction_terms = 1
+                interaction_output = 0
 
                 neighbors = torch.nonzero(sparse_adj_matrix[node], as_tuple=False).flatten()
                 for neighbor in neighbors:
                     neighbor = neighbor.item()
                     if neighbor == node:
                         continue
-                    neighbor_input = sparse_batch_x[:, neighbor, :]
-                    interaction_output = interaction_output + sparse_adj_matrix[node, neighbor] * inter_dynam_tree(neighbor_input)
-                    interaction_terms += 1
-
-                interaction_output = interaction_output / interaction_terms
+                    neighbor_input = torch.cat((node_input, sparse_batch_x[:, neighbor, :]), dim=-1)
+                    interaction_output += sparse_adj_matrix[node, neighbor] * inter_dynam_tree(neighbor_input)
 
                 node_outputs.append(forcing_output + interaction_output)
 
             batch_dy = torch.stack(node_outputs, dim=1)
-            batch_dy = torch.nan_to_num(batch_dy, nan=0.0, posinf=1e6, neginf=-1e6)
             batch_loss = criterion(batch_dy, sparse_dx_dt_val)
                 
                     
             batch_loss.backward()
-            torch.nn.utils.clip_grad_norm_(list(forcing_tree.all_parameters()), max_norm=grad_clip_norm)
-            torch.nn.utils.clip_grad_norm_(list(inter_dynam_tree.all_parameters()), max_norm=grad_clip_norm)
             adam_optim_forcing.step()
             adam_optim_inter.step()
 
@@ -107,7 +97,7 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
         max_iter=config.num_epochs
     )
 
-    # Build a deterministic train set for LBFGS closure
+    # prebuild train set for LBFGS closure
     bfgs_batches = []
     for batch_x, batch_dy_val in dataloader:
         batch_dy_val = batch_dy_val[:, :, 0] # Only learn first dim of dx/dt
@@ -140,31 +130,25 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             for node in range(sparse_adj_matrix.size(0)):
                 node_input = sparse_batch_x[:, node, :]
                 forcing_output = forcing_tree(node_input)
-                interaction_output = inter_dynam_tree(node_input)
-                interaction_terms = 1
+                interaction_output = 0
+
 
                 neighbors = torch.nonzero(sparse_adj_matrix[node], as_tuple=False).flatten()
                 for neighbor in neighbors:
                     neighbor = neighbor.item()
                     if neighbor == node:
                         continue
-                    neighbor_input = sparse_batch_x[:, neighbor, :]
-                    interaction_output = interaction_output + sparse_adj_matrix[node, neighbor] * inter_dynam_tree(neighbor_input)
-                    interaction_terms += 1
-
-                interaction_output = interaction_output / interaction_terms
+                    neighbor_input = torch.cat((node_input, sparse_batch_x[:, neighbor, :]), dim=-1)
+                    interaction_output += sparse_adj_matrix[node, neighbor] * inter_dynam_tree(neighbor_input)
 
                 node_outputs.append(forcing_output + interaction_output)
 
             batch_dy = torch.stack(node_outputs, dim=1)
-            batch_dy = torch.nan_to_num(batch_dy, nan=0.0, posinf=1e6, neginf=-1e6)
-
             batch_loss = criterion(batch_dy, sparse_dx_dt_val)
             total_loss.append(batch_loss)
 
         total_loss = torch.stack(total_loss).mean()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(all_parameters, max_norm=grad_clip_norm)
         return total_loss
 
     bfgs_loss = bfgs_optim.step(closure)
@@ -185,3 +169,75 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     inter_dynam_tree = best_inter_tree.to(runtimeconfig.device)
     return float(best_epoch_loss)
 
+
+if __name__ == "__main__":
+    from torch.utils.data import DataLoader, TensorDataset
+    from ..utils.tree_configs import get_tree_config
+    from ..utils.operations import UNARY_OPS, BINARY_OPS
+    import pandas as pd
+    import numpy as np
+    from ..utils.numerical_deriv import NumericalDeriv
+
+    adj_matrix = pd.read_csv('HR/data/BA_Nnodes100_Adj.csv', header=None)
+    num_graph_nodes = adj_matrix.shape[0]
+
+    x_df = pd.read_csv('HR/data/HR_timeseries_SNR_40.csv', header=None)
+    num_timesteps, num_cols = x_df.shape
+    x_np = x_df.to_numpy(dtype=np.float32)
+    x_data = torch.from_numpy(x_np.reshape(num_timesteps, num_graph_nodes, 3))
+
+    dt = 0.01
+    dx_dt = NumericalDeriv(x_data, dt=dt) # 4th order
+    x_data = x_data[2:-2]
+
+
+    train_test_split = int(0.8 * len(x_data))
+    train_x_data = x_data[:train_test_split]
+    train_dx_dt = dx_dt[:train_test_split]
+    adj_matrix_tensor = torch.tensor(adj_matrix.values, dtype=torch.float32).to(runtimeconfig.device)
+    x_data_tensor_ds = TensorDataset(train_x_data, train_dx_dt)
+    x_data_tensor_ds = x_data_tensor_ds[:len(x_data_tensor_ds)//5]
+    if runtimeconfig.device == "cuda":
+        dataloader = DataLoader(x_data_tensor_ds, batch_size=32, shuffle=True, pin_memory=True)
+    else:
+        dataloader = DataLoader(x_data_tensor_ds, batch_size=32, shuffle=True)
+
+    log_path = "FEX/training/testing/ground_truth_test.log"
+    runtimeconfig.CreateLogger(log_path, name="train_logger")
+
+    tree_config = get_tree_config("depth_3_leaves_4_config")
+    fex_config = FEXConfig(
+        num_epochs = 100, 
+        lr = 0.002,
+        bfgs_lr = 0.1,
+        max_nodes = 20,
+        max_norm = 1.0,
+        leaf_dim = x_data.shape[2],
+
+        num_leaves = tree_config.num_leaves
+    )
+
+
+    fex_kwargs = {
+        "leaf_dim": fex_config.leaf_dim,
+        "num_leaves": fex_config.num_leaves,
+        "tree_structure": tree_config,
+    }
+    forcing_op_indices = torch.tensor([0, 2, 2, 0, 0, 1, 2], dtype=torch.long).to(runtimeconfig.device)
+    forcing_fex = FEX(sample_indices=forcing_op_indices, **fex_kwargs).to(runtimeconfig.device)
+    forcing_fex.visualize_tree("FEX/training/testing/initial_forcing_tree.png")
+
+    inter_fex_kwargs = fex_kwargs.copy()
+    inter_fex_kwargs["leaf_dim"] = fex_config.leaf_dim * 2
+    inter_op_indices = torch.tensor([2, 0, 1, 5, 5, 0, 5], dtype=torch.long).to(runtimeconfig.device)
+    inter_fex = FEX(sample_indices=inter_op_indices, **inter_fex_kwargs).to(runtimeconfig.device)
+    inter_fex.visualize_tree("FEX/training/testing/initial_inter_tree.png")
+
+    train_network_fex(forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config)
+    forcing_fex.visualize_tree("FEX/training/testing/final_forcing_tree.png")
+    inter_fex.visualize_tree("FEX/training/testing/final_inter_tree.png")
+
+
+
+
+    

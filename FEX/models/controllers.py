@@ -29,8 +29,8 @@ class Controller(nn.Module):
 
 
 if __name__ == "__main__":
-    from .helpers.sampler import epsilon_greedy_sample
-    from .operations import UNARY_OPS, BINARY_OPS
+    from ..utils.sampler import epsilon_greedy_sample
+    from ..utils.operations import UNARY_OPS, BINARY_OPS
     NUM_NODES = 5
     """
     Example tree structure

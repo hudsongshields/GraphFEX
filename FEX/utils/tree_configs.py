@@ -1,7 +1,7 @@
 from ast import List
 from dataclasses import dataclass
 
-from .nodes import Node
+from ..models.nodes import Node
 from .operations import UNARY_OPS, BINARY_OPS
 
 # API only allows access to tree configs

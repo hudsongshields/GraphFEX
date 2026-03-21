@@ -1,4 +1,4 @@
-from ..nodes import Node
+from ..models.nodes import Node
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
