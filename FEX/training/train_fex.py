@@ -7,8 +7,6 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     adam_optim_forcing = torch.optim.Adam(forcing_tree.all_parameters(), lr=config.lr)
     adam_optim_inter = torch.optim.Adam(inter_dynam_tree.all_parameters(), lr=config.lr)
     train_logger = runtimeconfig.train_logger
-    train_logger.debug(f"starting param forcing tree: {[param.detach().cpu().numpy() for param in forcing_tree.tree_params()]}")
-    train_logger.debug(f"starting param inter tree: {[param.detach().cpu().numpy() for param in inter_dynam_tree.tree_params()]}")
 
     criterion = torch.nn.MSELoss()
 
@@ -48,16 +46,18 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
                 node_input = sparse_batch_x[:, node, :]
                 forcing_output = forcing_tree(node_input)
                 interaction_output = 0
+                interaction_count = 0
 
                 neighbors = torch.nonzero(sparse_adj_matrix[node], as_tuple=False).flatten()
                 for neighbor in neighbors:
                     neighbor = neighbor.item()
                     if neighbor == node:
                         continue
+                    interaction_count += 1
                     neighbor_input = torch.cat((node_input, sparse_batch_x[:, neighbor, :]), dim=-1)
-                    interaction_output += sparse_adj_matrix[node, neighbor] * inter_dynam_tree(neighbor_input)
+                    interaction_output += inter_dynam_tree(neighbor_input)
 
-                node_outputs.append(forcing_output + interaction_output)
+                node_outputs.append(forcing_output + (interaction_output/max(1, interaction_count)))    
 
             batch_dy = torch.stack(node_outputs, dim=1)
             batch_loss = criterion(batch_dy, sparse_dx_dt_val)
@@ -74,9 +74,7 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             best_forcing_tree = forcing_tree.copy_inorder()
             best_inter_tree = inter_dynam_tree.copy_inorder()
         train_logger.debug(f"Adam Epoch {epoch+1}/{config.num_epochs}, Loss: {epoch_loss:.4f}")
-    train_logger.debug(f"param forcing tree: {[param.detach().cpu().numpy() for param in forcing_tree.tree_params()]}")
-    train_logger.debug(f"param inter tree: {[param.detach().cpu().numpy() for param in inter_dynam_tree.tree_params()]}")
-
+    
     if not math.isfinite(epoch_loss):
         train_logger.warning(f"Adam Training Completed with non-finite loss: {epoch_loss}")
         if best_epoch_loss != float('inf'):
@@ -131,17 +129,18 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
                 node_input = sparse_batch_x[:, node, :]
                 forcing_output = forcing_tree(node_input)
                 interaction_output = 0
-
+                interaction_count = 0
 
                 neighbors = torch.nonzero(sparse_adj_matrix[node], as_tuple=False).flatten()
                 for neighbor in neighbors:
                     neighbor = neighbor.item()
                     if neighbor == node:
                         continue
+                    interaction_count += 1
                     neighbor_input = torch.cat((node_input, sparse_batch_x[:, neighbor, :]), dim=-1)
-                    interaction_output += sparse_adj_matrix[node, neighbor] * inter_dynam_tree(neighbor_input)
+                    interaction_output += inter_dynam_tree(neighbor_input)
 
-                node_outputs.append(forcing_output + interaction_output)
+                node_outputs.append(forcing_output + (interaction_output / max(1, interaction_count)))
 
             batch_dy = torch.stack(node_outputs, dim=1)
             batch_loss = criterion(batch_dy, sparse_dx_dt_val)
@@ -196,28 +195,24 @@ if __name__ == "__main__":
     train_dx_dt = dx_dt[:train_test_split]
     adj_matrix_tensor = torch.tensor(adj_matrix.values, dtype=torch.float32).to(runtimeconfig.device)
     x_data_tensor_ds = TensorDataset(train_x_data, train_dx_dt)
-    x_data_tensor_ds = x_data_tensor_ds[:len(x_data_tensor_ds)//5]
     if runtimeconfig.device == "cuda":
-        dataloader = DataLoader(x_data_tensor_ds, batch_size=32, shuffle=True, pin_memory=True)
+        dataloader = DataLoader(x_data_tensor_ds, batch_size=256, shuffle=True, pin_memory=True)
     else:
-        dataloader = DataLoader(x_data_tensor_ds, batch_size=32, shuffle=True)
+        dataloader = DataLoader(x_data_tensor_ds, batch_size=256, shuffle=True)
 
     log_path = "FEX/training/testing/ground_truth_test.log"
     runtimeconfig.CreateLogger(log_path, name="train_logger")
 
     tree_config = get_tree_config("depth_3_leaves_4_config")
     fex_config = FEXConfig(
-        num_epochs = 100, 
+        num_epochs = 1, 
         lr = 0.002,
         bfgs_lr = 0.1,
         max_nodes = 20,
-        max_norm = 1.0,
         leaf_dim = x_data.shape[2],
 
         num_leaves = tree_config.num_leaves
     )
-
-
     fex_kwargs = {
         "leaf_dim": fex_config.leaf_dim,
         "num_leaves": fex_config.num_leaves,
@@ -229,7 +224,7 @@ if __name__ == "__main__":
 
     inter_fex_kwargs = fex_kwargs.copy()
     inter_fex_kwargs["leaf_dim"] = fex_config.leaf_dim * 2
-    inter_op_indices = torch.tensor([2, 0, 1, 5, 5, 0, 5], dtype=torch.long).to(runtimeconfig.device)
+    inter_op_indices = torch.tensor([2, 0, 1, 0, 5, 0, 5], dtype=torch.long).to(runtimeconfig.device)
     inter_fex = FEX(sample_indices=inter_op_indices, **inter_fex_kwargs).to(runtimeconfig.device)
     inter_fex.visualize_tree("FEX/training/testing/initial_inter_tree.png")
 
@@ -237,7 +232,7 @@ if __name__ == "__main__":
     forcing_fex.visualize_tree("FEX/training/testing/final_forcing_tree.png")
     inter_fex.visualize_tree("FEX/training/testing/final_inter_tree.png")
 
-
-
+    print(f"Final Forcing Tree Equation: {forcing_fex}")
+    print(f"Final Inter Tree Equation: {inter_fex}")
 
     

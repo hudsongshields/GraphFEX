@@ -51,7 +51,6 @@ class FEX(nn.Module):
     def forward(self, x: torch.Tensor):
         leaf_outputs = [leaf_mlp(x) for leaf_mlp in self.leaf_mlps]
         
-
         def compute_node(node: Node, depth: int = 0):
             indent = "  " * depth
             tree_logger.debug(f"{indent}Entering {node.operation_type}")
@@ -162,6 +161,10 @@ class FEX(nn.Module):
             copied_leaf_mlp.load_state_dict(original_leaf_mlp.state_dict())
         return copied_fex
 
+
+    def __str__(self):
+        leaf_expressions = [leaf_mlp.expression() for leaf_mlp in self.leaf_mlps]
+        return self.parent_node.__str__(leaf_expressions=leaf_expressions)
     
 
 
