@@ -81,6 +81,7 @@ class Node:
 
         return self
     
+    """Tools for storing and visualization"""
     def copy_inorder(self):
         return Node(
             operation_type=self.operation_type,
@@ -161,3 +162,16 @@ class Node:
         dot.render(filename, format=format, cleanup=True)
         return dot
             
+    
+    def __str__(self, leaf_expressions=None):
+        if self.operation_type == "leaf":
+            if leaf_expressions is not None:
+                return f"({leaf_expressions[self.leaf_idx]})"
+            else:
+                return f"x{self.leaf_idx}"
+        elif self.operation_type == "unary":
+            a_val = self.operation.a.detach().cpu().flatten()[0].item()
+            b_val = self.operation.b.detach().cpu().flatten()[0].item()
+            return f"({a_val:.3f} * {self.operation.op.__name__}({self.left.__str__(leaf_expressions)}) + {b_val:.3f})"
+        elif self.operation_type == "binary":
+            return f"({self.left.__str__(leaf_expressions)} {self.operation.op.__name__} {self.right.__str__(leaf_expressions)})"
