@@ -1,5 +1,8 @@
 """API for the FEX package"""
 
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 from .models.controllers import Controller
 from .models.learnable_tree import FEX
 from .training.train_configs import ControllerConfig, FEXConfig, RunTimeConfig, runtimeconfig

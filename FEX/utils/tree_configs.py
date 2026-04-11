@@ -11,7 +11,7 @@ __all__ = [
 ]
 
 # Tree Configuration Returns Parent Node
-def depth_2_tree(sample_indices) -> Node:
+def depth_2_tree(sample_indices):
     leaf1 = Node(operation_type="leaf", leaf_idx=0, name="leaf1", operation=None)
     leaf2 = Node(operation_type="leaf", leaf_idx=1, name="leaf2", operation=None)
     branch1 = Node(operation_type="unary", operation=UNARY_OPS[sample_indices[1]], left=leaf1, name="branch1")
@@ -29,7 +29,7 @@ Depth 3 Tree with:
 - 4 unary ops at the second level
 - 4 leaf nodes at the third level
 """
-def depth_3_leaves_4(sample_indices) -> Node:
+def depth_3_leaves_4(sample_indices):
     
     leaf1 = Node(operation_type="leaf", leaf_idx=0, name="leaf1", operation=None)
     leaf2 = Node(operation_type="leaf", leaf_idx=1, name="leaf2", operation=None)
@@ -53,13 +53,39 @@ def ops_per_depth_3_leaves_4():
 
 
 """
+Depth 3 Tree with:
+- 1 binary op at the root
+- 1 binary op and 1 unary op at the first level
+- 2 unary ops and 1 leaf at the second level
+- 2 leaf nodes at the third level
+"""
+def depth_3_partial(sampled_indices):
+    
+    leaf1 = Node(operation_type="leaf", leaf_idx=0, name="leaf1", operation=None)
+    leaf2 = Node(operation_type="leaf", leaf_idx=1, name="leaf2", operation=None)
+    leaf3 = Node(operation_type="leaf", leaf_idx=2, name="leaf3", operation=None)
+
+    l2_branch1 = Node(operation_type="unary", operation=UNARY_OPS[sampled_indices[3]], left=leaf1, name="l2_branch1")
+    l2_branch2 = Node(operation_type="unary", operation=UNARY_OPS[sampled_indices[4]], left=leaf2, name="l2_branch2")
+
+    l1_branch1 = Node(operation_type="binary", operation=BINARY_OPS[sampled_indices[1]], left=l2_branch1, right=l2_branch2, name="l1_branch1")
+    l1_branch2 = Node(operation_type="unary", operation=UNARY_OPS[sampled_indices[2]], left=leaf3, name="l1_branch2")
+
+    parent_node = Node(operation_type="binary", operation=BINARY_OPS[sampled_indices[0]], left=l1_branch1, right=l1_branch2, name="parent_node")
+
+    return parent_node
+
+def ops_per_depth_3_partial():
+    return [len(BINARY_OPS), len(BINARY_OPS), len(UNARY_OPS), len(UNARY_OPS), len(UNARY_OPS)]
+
+"""
 Depth 3 Tree:
 - 1 unary op at the root
 - 1 binary op at the first level
 - 2 unary ops at the second level
 - 2 leaf nodes
 """
-def depth_3(sample_indices) -> Node:
+def depth_3(sample_indices):
     leaf1 = Node(operation_type="leaf", leaf_idx=0, name="leaf1", operation=None)
     leaf2 = Node(operation_type="leaf", leaf_idx=1, name="leaf2", operation=None)
 
@@ -83,7 +109,7 @@ Depth 4 Tree:
 - 4 unary ops at the third level
 - 4 leaf ops at the fourth level
 """
-def depth_4(sample_indices) -> Node:
+def depth_4(sample_indices):
     leaf1 = Node(operation_type="leaf", leaf_idx=0, name="leaf1", operation=None)
     leaf2 = Node(operation_type="leaf", leaf_idx=1, name="leaf2", operation=None)
     leaf3 = Node(operation_type="leaf", leaf_idx=2, name="leaf3", operation=None)
@@ -139,6 +165,7 @@ TREE_CONFIGS = {
     "depth_3_tree_config": depth_3_tree_config,
     "depth_4_tree_config": depth_4_tree_config,
     "depth_3_leaves_4_config": depth_3_leaves_4_config,
+    "depth_3_partial_config": TreeConfig(tree_func=depth_3_partial, ops_per_node=ops_per_depth_3_partial(), num_leaves=3),
 }
 
 

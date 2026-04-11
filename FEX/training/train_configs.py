@@ -47,16 +47,32 @@ class ControllerConfig():
 
 @dataclass
 class FEXConfig():
+    num_groups: int = 1
+    leaf_dim: int = None
+    num_leaves: int = None
+
     lr: float = 0.001
-    num_epochs: int = 10
-    max_nodes: int = 20
-    leaf_dim: int = 1
-    num_leaves: int = 2
+    leaf_lr: float = None  # separate LR for leaf logits (defaults to lr if None)
+    num_epochs: int = 15
+
+    bfgs_epochs: int = 15
     bfgs_lr: float = 0.1
-    
+
     tau_start: float = 1.0
-    tau_end: float = 0.1
-    tau_anneal_epochs: int = 10
+    tau_end: float = 0.02
+
+    # Multi-step rollout loss
+    rollout_steps: int = 5        # Euler steps per rollout window
+    rollout_weight: float = 0.8    # weight of rollout loss (ramped up over warmup)
+    rollout_dt: float = 0.01       # timestep for Euler integration
+
+    # Regularization
+    mag_entropy_weight: float = 0.03  # weight for magnitude entropy regularization
+    
+    def __post_init__(self):
+        self.tau_anneal_epochs = int(self.num_epochs * 0.75)
+        self.set_hard_at = int(self.num_epochs * 0.5)
+        self.leaf_lr = self.lr if self.leaf_lr is None else self.leaf_lr
 
 
 runtimeconfig = RunTimeConfig()
