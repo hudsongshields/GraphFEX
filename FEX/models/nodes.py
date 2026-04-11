@@ -1,20 +1,34 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import Callable, Optional
 import copy
-from graphviz import Digraph
+
 
 
 class UnaryOperation(nn.Module):
     def __init__(self, op: Callable):
         super().__init__()
-        self.a = nn.Parameter(torch.tensor([1.0]))
-        self.b = nn.Parameter(torch.tensor([0.0]))
+
+        self.log_mag = nn.Parameter(torch.empty((1)).uniform_(0.1, 4.0).log())
+        self.sign_logit = nn.Parameter(0.1 * torch.randn((1)))
+        self.b = nn.Parameter(1.5 * torch.randn((1)))
         self.op = op
 
+    @staticmethod
+    def _hard_sign_ste(x):
+        hard = torch.where(x >= 0, torch.ones_like(x), -torch.ones_like(x))
+        return x + (hard - x).detach()
+        
+        
     def forward(self, x: torch.Tensor):
-        return self.a * self.op(x) + self.b
+        sign = self._hard_sign_ste(self.sign_logit)
+        magnitude = torch.exp(self.log_mag)
+        a = sign * magnitude
+        return a * self.op(x) + self.b #  + x - x.detach()
+    
+
 
 
 class BinaryOperation(nn.Module):
@@ -57,107 +71,91 @@ class Node:
     
     def get_parameters(self):
         params = []
-
         if isinstance(self.operation, nn.Module):
             params.extend(self.operation.parameters())
-
         if self.left is not None:
             params.extend(self.left.get_parameters())
-
         if self.right is not None:
             params.extend(self.right.get_parameters())
-
         return params
     
     def to(self, device):
         if isinstance(self.operation, nn.Module):
             self.operation.to(device)
-
         if self.left is not None:
             self.left.to(device)
-
         if self.right is not None:
             self.right.to(device)
-
         return self
     
     def copy_inorder(self):
-        return Node(
+        # Avoid deepcopy on nn.Modules and tensors; use state_dict/load_state_dict for safe copying
+        device = None
+        if isinstance(self.operation, nn.Module):
+            # Get device from first parameter
+            params = list(self.operation.parameters())
+            if params:
+                device = params[0].device
+        if self.operation_type == "unary" and isinstance(self.operation, UnaryOperation):
+            new_op = UnaryOperation(self.operation.op)
+            new_op.load_state_dict(self.operation.state_dict())
+            if device is not None:
+                new_op.to(device)
+        elif self.operation_type == "binary" and isinstance(self.operation, BinaryOperation):
+            new_op = BinaryOperation(self.operation.op)
+            new_op.load_state_dict(self.operation.state_dict())
+            if device is not None:
+                new_op.to(device)
+        else:
+            new_op = self.operation  # for leaves or non-module ops
+
+        node = Node(
             operation_type=self.operation_type,
-            operation=copy.deepcopy(self.operation),
+            operation=new_op,
             leaf_idx=self.leaf_idx,
             left=self.left.copy_inorder() if self.left else None,
             right=self.right.copy_inorder() if self.right else None,
             name=self.name
         )
-    
-    def load_state_dict(self, state_dict, prefix=""):
-        if isinstance(self.operation, nn.Module):
-            op_prefix = f"{prefix}op."
-            op_state = {
-                key[len(op_prefix):]: value
-                for key, value in state_dict.items()
-                if key.startswith(op_prefix)
-            }
-            self.operation.load_state_dict(op_state, strict=False)
+        # Propagate device to children
+        if device is not None:
+            node.to(device)
+        return node
 
-        if self.left is not None:
-            self.left.load_state_dict(state_dict, prefix=f"{prefix}left.")
+    def freeze_b(self):
+        if self.operation_type == "unary":
+            self.operation.b.requires_grad = False
+    def unfreeze_b(self):
+        if self.operation_type == "unary":
+            self.operation.b.requires_grad = True
 
-        if self.right is not None:
-            self.right.load_state_dict(state_dict, prefix=f"{prefix}right.")
+    def _get_a_and_b(self):
+        if self.operation_type == "unary":
+            op = self.operation
+            sign = torch.where(op.sign_logit >= 0, torch.ones_like(op.sign_logit), -torch.ones_like(op.sign_logit))
+            magnitude = torch.exp(op.log_mag)
+            a = sign * magnitude
+            b = op.b
+            return a.item(), b.item()
+        
+    def __str__(self, leaf_expressions=None):
+        if self.operation_type == "leaf":
+            if leaf_expressions is not None:
+                return f"({leaf_expressions[self.leaf_idx]})"
+            else:
+                return f"x{self.leaf_idx}"
+        elif self.operation_type == "unary":
+            a, b = self._get_a_and_b()
+            return f"({a:.3f} * {self.operation.op.__name__}({self.left.__str__(leaf_expressions)}) + {b:.3f})"
+        elif self.operation_type == "binary":
+            return f"({self.left.__str__(leaf_expressions)} {self.operation.op.__name__} {self.right.__str__(leaf_expressions)})"
+        
+    """externally defined member function helpers"""
+    """
+    from ..training.tree_helpers import visualize_tree, node_load_state_dict, node_state_dict
 
-    def state_dict(self, prefix=""):
-        state = {}
-        if isinstance(self.operation, nn.Module):
-            for key, value in self.operation.state_dict().items():
-                state[f"{prefix}op.{key}"] = value
+    visualize_tree = visualize_tree
+    load_state_dict = node_load_state_dict
+    state_dict = node_state_dict
+    """
 
-        if self.left is not None:
-            state.update(self.left.state_dict(prefix=f"{prefix}left."))
-
-        if self.right is not None:
-            state.update(self.right.state_dict(prefix=f"{prefix}right."))
-
-        return state
-
-    
-    def visualize_tree_inorder(self, filename=None, format="png", leaf_transforms=None):
-        dot = Digraph()
-
-        def safe_op_name(op):
-            name = getattr(op, "__name__", str(op))
-            # Graphviz interprets angle brackets as HTML labels.
-            return name.replace("<", "(").replace(">", ")")
-
-        def add_nodes_edges(node, parent_id=None):
-            node_id = str(id(node))
-            if node.operation_type == "leaf":
-                if not leaf_transforms:
-                    label = f"Leaf {node.leaf_idx}"
-                else:
-                    label = f"{leaf_transforms[node.leaf_idx]}"
-            elif node.operation_type == "binary":
-                label = f"binary: {safe_op_name(node.operation.op)}"
-            elif node.operation_type == "unary":
-                a_val = node.operation.a.detach().cpu().flatten()[0].item()
-                b_val = node.operation.b.detach().cpu().flatten()[0].item()
-                label = f"{a_val:.3f} * {safe_op_name(node.operation.op)} + {b_val:.3f}"
-            dot.node(node_id, label=label)
-
-            if parent_id is not None:
-                dot.edge(parent_id, node_id)
-
-            if node.left:
-                add_nodes_edges(node.left, node_id)
-            if node.right:
-                add_nodes_edges(node.right, node_id)
-
-        add_nodes_edges(self)
-
-        if filename is None:
-            return dot
-
-        dot.render(filename, format=format, cleanup=True)
-        return dot
-            

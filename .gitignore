@@ -9,3 +9,4 @@ logs/
 *.csv
 *.log
 FEX/training/testing/
+FEX/training/debug/

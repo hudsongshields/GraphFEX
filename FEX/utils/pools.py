@@ -1,19 +1,24 @@
-from ..models.nodes import Node
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..models.nodes import Node
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import torch
 
+
 @dataclass
 class PoolCandidate:
-    node: Node
+    node: "Node"
     reward: float
     id: int
 
+
 @dataclass
 class GraphPoolCandidate:
-    inter_tree: Node
-    forcing_tree: Node
+    inter_tree: "Node"
+    forcing_tree: "Node"
     reward: float
     id: int
     metadata: dict = None
@@ -51,18 +56,8 @@ class Pool():
     
 class GraphPool(Pool):
     def _build_fex_checkpoint(self, fex):
-        sample_indices = fex.sample_indices
-        if isinstance(sample_indices, torch.Tensor):
-            sample_indices = sample_indices.detach().cpu().to(dtype=torch.int64).tolist()
-        elif sample_indices is not None:
-            sample_indices = [int(i) for i in sample_indices]
-
         return {
             "state_dict": fex.state_dict(),
-            "sample_indices": sample_indices,
-            "tree_config_name": fex._tree_config_name(),
-            "leaf_dim": int(fex.leaf_dim),
-            "num_leaves": int(len(fex.leaf_mlps)),
         }
 
     def add_new(self, candidate: GraphPoolCandidate):
