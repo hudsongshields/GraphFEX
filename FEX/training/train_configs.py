@@ -52,6 +52,7 @@ class FEXConfig():
     num_leaves: int = None
 
     lr: float = 0.001
+    inter_lr: float = 0.001
     leaf_lr: float = None  # separate LR for leaf logits (defaults to lr if None)
     num_epochs: int = 15
 

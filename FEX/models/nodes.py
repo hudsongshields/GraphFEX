@@ -11,22 +11,13 @@ class UnaryOperation(nn.Module):
     def __init__(self, op: Callable):
         super().__init__()
 
-        self.log_mag = nn.Parameter(torch.empty((1)).uniform_(0.1, 4.0).log())
-        self.sign_logit = nn.Parameter(0.1 * torch.randn((1)))
+        self.a = nn.Parameter(torch.empty((1)).uniform_(0.1, 4.0))
         self.b = nn.Parameter(1.5 * torch.randn((1)))
         self.op = op
 
-    @staticmethod
-    def _hard_sign_ste(x):
-        hard = torch.where(x >= 0, torch.ones_like(x), -torch.ones_like(x))
-        return x + (hard - x).detach()
-        
         
     def forward(self, x: torch.Tensor):
-        sign = self._hard_sign_ste(self.sign_logit)
-        magnitude = torch.exp(self.log_mag)
-        a = sign * magnitude
-        return a * self.op(x) + self.b #  + x - x.detach()
+        return self.a * self.op(x) + self.b #  + x - x.detach()
     
 
 
@@ -132,9 +123,7 @@ class Node:
     def _get_a_and_b(self):
         if self.operation_type == "unary":
             op = self.operation
-            sign = torch.where(op.sign_logit >= 0, torch.ones_like(op.sign_logit), -torch.ones_like(op.sign_logit))
-            magnitude = torch.exp(op.log_mag)
-            a = sign * magnitude
+            a = op.a
             b = op.b
             return a.item(), b.item()
         
