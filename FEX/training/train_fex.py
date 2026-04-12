@@ -6,7 +6,7 @@ from .train_configs import FEXConfig, runtimeconfig
 import torch
 import torch.nn.functional as F
 import math
-from .loss_funcs import euler_loss, group_loss, mag_reverse_l2_regularization
+from .loss_funcs import group_loss, mag_reverse_l2_regularization
 from .tree_helpers import get_noise_stds
 
 def leaf_entropy(fex: FEX):
@@ -24,8 +24,8 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     forcing_tree_params = list(forcing_tree.all_parameters())
     inter_tree_params = list(inter_dynam_tree.all_parameters())
 
-    adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr, betas=(0.2, 0.999), weight_decay=0)
-    adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.lr, betas=(0.2, 0.999), weight_decay=0)
+    adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr, betas=(0.95, 0.999), weight_decay=0)
+    adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr, betas=(0.95, 0.999), weight_decay=0)
     train_logger = runtimeconfig.train_logger
 
     scheduler_self = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
@@ -36,7 +36,7 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     scheduler_inter = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         adam_optim_inter,
         T_0=max(int(config.num_epochs * config.pct_cosine_restart), 1),
-        eta_min=config.lr * 0.15
+        eta_min=config.inter_lr * 0.15
     )
 
     # For plotting
@@ -50,7 +50,6 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     nodes = nodes[interaction_indices].to(runtimeconfig.device)
     edges = edges[interaction_indices].to(runtimeconfig.device)
 
-    use_rollout = x_sequential is not None and config.rollout_weight > 0
 
 
     num_groups = config.num_groups
@@ -110,25 +109,9 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
                     entropy = leaf_entropy(forcing_tree) + leaf_entropy(inter_dynam_tree)
                     batch_loss = batch_loss - entropy_weight * entropy
 
-            # Euler loss – Gaussian bell curve centered at epoch 500, skip early epochs entirely
-            if use_rollout:
-                center = config.num_epochs * 0.5
-                sigma = config.num_epochs / 6.0
-                if epoch >= center - 2.5 * sigma and epoch <= center + 2.5 * sigma:
-                    rollout_weight = config.rollout_weight * math.exp(-0.5 * ((epoch - center) / sigma) ** 2)
-                    r_loss = euler_loss(
-                        x_sequential, config.rollout_dt,
-                        forcing_tree, inter_dynam_tree, adj_matrix,
-                        nodes, edges,
-                        rollout_steps=config.rollout_steps,
-                    )
-                    # Log-scale: compress large Euler losses while preserving relative ordering
-                    r_loss = torch.log1p(r_loss)
-                    batch_loss = batch_loss + r_loss * rollout_weight
 
             if (mag_entropy_weight := config.mag_entropy_weight) > 0:
-                mag_entropy = 0.0
-                mag_entropy += mag_reverse_l2_regularization(forcing_tree)
+                mag_entropy = mag_reverse_l2_regularization(forcing_tree)
                 mag_entropy += mag_reverse_l2_regularization(inter_dynam_tree)
                 batch_loss = batch_loss + mag_entropy_weight * mag_entropy
 
@@ -140,13 +123,11 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             num_batches += 1
 
 
-        # DEBUG: Print gradients for key parameters (e.g., cubed_term_node.operation.log_mag)
+        # DEBUG: Print gradients for key parameters (cubed_term_node.operation.a)
         cubed_term_node = forcing_tree.parent_node.left.right
-        log_mag_grad = cubed_term_node.operation.log_mag.grad
-        sign_logit_grad = cubed_term_node.operation.sign_logit.grad
+        a_grad = cubed_term_node.operation.a.grad
         leaf_logits_grad = forcing_tree.leaf_mlps[1].logits.grad
-        print(f"[DEBUG] log_mag grad: {log_mag_grad}")
-        print(f"[DEBUG] sign_logit grad: {sign_logit_grad}")
+        print(f"[DEBUG] a grad: {a_grad}")
         print(f"[DEBUG] leaf logits grad: {leaf_logits_grad}")
 
         
@@ -158,10 +139,10 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
 
         # Track loss and coefficient
         loss_history.append(mean_epoch_loss)
-        # Try to get the coefficient (log_mag) for plotting
+        # Try to get the coefficient (a) for plotting
         try:
             cubed_term_node = forcing_tree.parent_node.left.right
-            coeff_history.append(float(cubed_term_node.operation.log_mag.detach().cpu().item()))
+            coeff_history.append(float(cubed_term_node.operation.a.detach().cpu().item()))
         except Exception:
             coeff_history.append(float('nan'))
 
@@ -263,22 +244,22 @@ if __name__ == "__main__":
     from .tree_helpers import visualize_tree
     from .debug import debug_tree_configs
 
-    run_str = "debugging/recover_cubed_coeff_and_dim"
+    run_str = "debugging/recover_all_terms"
     save_path = Path(f"FEX/training/testing/{run_str}/final_inter_tree.png")
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
     adj_matrix = pd.read_csv('HR/data/BA_Nnodes100_Adj_deg_7_1.csv', header=None)
     num_graph_nodes = adj_matrix.shape[0]
 
-    x_df = pd.read_csv('HR/new_data/HR_timeseries_BA_deg_7_1_runs_5.csv', header=None)
+    x_df = pd.read_csv('HR/data/HR_timeseries_BA_deg_7_1_SNR_45.csv', header=None)
     num_timesteps, num_cols = x_df.shape
     x_np = x_df.to_numpy(dtype=np.float32)
     x_data = torch.from_numpy(x_np.reshape(num_timesteps, num_graph_nodes, 3))
 
     dt = 0.01
-    len_run = 100
+    len_run = 500
     per_run_timesteps = int(len_run / dt)
-    cut_timestep = per_run_timesteps * 1.0
+    cut_timestep = per_run_timesteps * 0.8
     
     num_runs = num_timesteps // per_run_timesteps
     x_chunks = torch.chunk(x_data, num_runs, dim=0)
@@ -315,10 +296,11 @@ if __name__ == "__main__":
     inter_tree_config = get_tree_config("depth_2_tree_config")
 
     fex_config = FEXConfig(
-        num_epochs = 1000,
+        num_epochs = 5000,
         bfgs_epochs = 0,
         lr = 0.02,
         leaf_lr = 0.02,
+        inter_lr = 0.008,
         bfgs_lr = 0.1,
         num_groups = 1,
         leaf_dim = x_data.shape[2],
@@ -329,7 +311,7 @@ if __name__ == "__main__":
     fex_config.pct_cosine_restart = 0.25
     fex_config.set_hard_at = 0.5
 
-    fex_config.mag_entropy_weight = 0.9
+    fex_config.mag_entropy_weight = 0.005
 
     forcing_op_indices = torch.tensor([0, 0, 0, 0, 2, 1, 0], dtype=torch.long).to(runtimeconfig.device)
     forcing_fex = FEX(
@@ -346,13 +328,13 @@ if __name__ == "__main__":
         leaf_dim=fex_config.leaf_dim * 2,
         num_leaves=inter_tree_config.num_leaves,
         tree_structure=inter_tree_config,
-        init_tau=fex_config.tau_start
+        init_tau=fex_config.tau_start,
     ).to(runtimeconfig.device)
 
 
     """ FOR DEBUGGING """
     
-    forcing_fex = None
+    """    forcing_fex = None
     inter_fex = None
     forcing_fex = debug_tree_configs.build_debug_dx_forcing_fex(node_dim=fex_config.leaf_dim, device=runtimeconfig.device)
     inter_fex = debug_tree_configs.build_debug_interaction_fex(node_dim=fex_config.leaf_dim, device=runtimeconfig.device)
@@ -363,28 +345,19 @@ if __name__ == "__main__":
     for param in inter_fex.all_parameters():
         param.requires_grad = False
     
-    """    
-    forcing_fex.set_leaf_hard(True)
-    inter_fex.set_leaf_hard(True)"""
     
     # set to random only this param to test if can recover
     with torch.no_grad():
-        log_mag = torch.empty((1)).uniform_(0.1, 1.0).log()
-        sign_logit = torch.ones(1) * (0.1)
         cubed_term_node = forcing_fex.parent_node.left.right
-        cubed_term_node.operation.log_mag.fill_(log_mag.item())
-        cubed_term_node.operation.sign_logit.fill_(sign_logit.item())
+        # cubed_term_node.operation.a.fill_(torch.empty((1)).uniform_(-2.0, -1.0).item())
 
         # fill random to see if can recover
         fill_val = torch.randn((1,)).item() * 0.1
         forcing_fex.leaf_mlps[1].logits.fill_(fill_val)
 
-        """for leaf in forcing_fex.leaf_mlps:
-            leaf.sigma.fill_(-100.0)"""
 
     forcing_fex.leaf_mlps[1].logits.requires_grad = True
-    cubed_term_node.operation.log_mag.requires_grad = True
-    cubed_term_node.operation.sign_logit.requires_grad = True
+    cubed_term_node.operation.a.requires_grad = True"""
     
 
     loss = 0.0
@@ -411,70 +384,3 @@ if __name__ == "__main__":
         graph_pool.add_new(candidate=pool_candidate)
         graph_pool.save_candidates(directory=f"{str(save_path.parent)}", clear_directory=False)
         print(f"Saved to {save_path.parent}")
-
-        # Plot loss, coefficient, true and predicted dy/dx
-        import matplotlib.pyplot as plt
-        # True dy/dx (dim 1)
-        true_dydx = dx_dt[:, :, 1].reshape(-1).cpu().numpy()
-        # Predicted dy/dx (dim 1)
-
-        with torch.no_grad():
-            pred_dydx = []
-            device = next(forcing_fex.parameters()).device
-            for i in range(x_data.shape[0]):
-                pred = forcing_fex(x_data[i].to(device))
-                if pred.ndim == 2:
-                    # If only one feature, use column 0; else, use column 1
-                    if pred.shape[1] == 1:
-                        pred_dim1 = pred[:, 0].cpu().numpy()
-                    elif pred.shape[1] > 1:
-                        pred_dim1 = pred[:, 1].cpu().numpy()
-                    else:
-                        raise ValueError(f"Unexpected pred shape: {pred.shape}")
-                elif pred.ndim == 1:
-                    # fallback: single node
-                    if pred.shape[0] > 1:
-                        pred_dim1 = np.array([pred[1].cpu().item()])
-                    else:
-                        pred_dim1 = np.array([pred[0].cpu().item()])
-                else:
-                    raise ValueError(f"Unexpected pred shape: {pred.shape}")
-                pred_dydx.append(pred_dim1)
-            pred_dydx = np.concatenate(pred_dydx, axis=0)  # shape: (num_timesteps * num_nodes,)
-
-        import torch.nn.functional as F
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        axes[0, 0].plot(loss_history, label='Loss')
-        axes[0, 0].set_title('Loss Curve')
-        axes[0, 0].set_xlabel('Epoch')
-        axes[0, 0].set_ylabel('Loss')
-        axes[0, 0].legend()
-
-        axes[0, 1].plot(F.softplus(torch.tensor(coeff_history)), label='Coefficient (log_mag)')
-        axes[0, 1].set_title('Coefficient Value')
-        axes[0, 1].set_xlabel('Epoch')
-        axes[0, 1].set_ylabel('Value')
-        axes[0, 1].legend()
-
-        axes[1, 0].plot(true_dydx[:], label='True dy/dx (dim 1)')
-        axes[1, 0].plot(pred_dydx[:], label='Predicted dy/dx (dim 1)', linestyle='dashed', color='orange', alpha=0.7, linewidth=2)
-        axes[1, 0].plot(true_dydx[:], label='True dy/dx (dim 1)', color='blue', linewidth=3, zorder=10)
-        axes[1, 0].set_title('True vs Predicted dy/dx (dim 1)')
-        axes[1, 0].set_xlabel('Time Step')
-        axes[1, 0].set_ylabel('dy/dx')
-        axes[1, 0].legend()
-        import matplotlib.ticker as mticker
-        axes[1, 0].xaxis.set_major_formatter(mticker.ScalarFormatter(useOffset=False))
-        axes[1, 0].ticklabel_format(style='plain', axis='x')
-
-        error = true_dydx[:] - pred_dydx[:]
-        axes[1, 1].plot(error, label='Error (True - Pred)')
-        axes[1, 1].set_title('Prediction Error (dim 1)')
-        axes[1, 1].set_xlabel('Time Step')
-        axes[1, 1].set_ylabel('Error')
-        axes[1, 1].legend()
-        axes[1, 1].xaxis.set_major_formatter(mticker.ScalarFormatter(useOffset=False))
-        axes[1, 1].ticklabel_format(style='plain', axis='x')
-
-        plt.tight_layout()
-        plt.show()

@@ -114,14 +114,14 @@ class FEX(nn.Module):
         """Parameters controlling tree node scalars (sign, magnitude, bias)."""
         return list(self.parent_node.get_parameters())
     
-    def tree_log_mags(self):
-        """Helper to extract log magnitudes from tree nodes for regularization."""
-        log_mags = []
+    def tree_mags(self):
+        """Helper to extract 'a' parameters from tree nodes for regularization."""
+        mags = []
         def action(node: Node):
             if node.operation_type == "unary":
-                log_mags.append(node.operation.log_mag)
+                mags.append(node.operation.a)
         traverse(self.parent_node, action)
-        return log_mags
+        return mags
 
     def to(self, device):
         super().to(device)
