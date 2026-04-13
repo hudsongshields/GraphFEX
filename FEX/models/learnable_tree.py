@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .nodes import Node
-from ..utils.tree_configs import TREE_CONFIGS, get_tree_config
+from ..utils.tree_configs import TREE_CONFIGS
 
 import logging
 tree_logger = logging.getLogger("debug_tree")
@@ -17,44 +17,34 @@ class LeafMLP(nn.Module):
         super().__init__()
         self.logits = nn.Parameter(torch.randn(input_dim) * 0.1)
         self.register_buffer("tau", torch.tensor(init_tau, dtype=torch.float32))
-
-        # self.sigma = nn.Parameter(torch.tensor(0.0))
-
         self.hard = hard
     
     def forward(self, leaf_input: torch.Tensor):
         logits = self.logits
-        # logits = (logits - logits.mean()) / (logits.std() + 1e-8)
         weights = F.gumbel_softmax(logits, dim=-1, hard=self.hard, tau=float(self.tau.item()))
         out = (weights * leaf_input).sum(dim=-1, keepdim=True)
-        # out = out + leaf_input.sum(dim=-1, keepdim=True) - leaf_input.detach().sum(dim=-1, keepdim=True)
-
-        # print(f"Weights: {weights.detach().cpu().numpy()}")
         return out
 
+    """ Gumbel softmax control """
     def set_hard(self, hard: bool):
         self.hard = hard
 
     def set_tau(self, tau: float):
         self.tau.fill_(max(float(tau), 1e-3))
 
-    def get_tau(self):
-        return float(self.tau.item())
     
-    def selected_dim(self):
+    """ Printable expression """
+    def _selected_dim(self):
         return int(self.logits.argmax().item())
 
-    def selection_confidence(self):
+    def _selection_confidence(self):
         probs = torch.softmax(self.logits.detach(), dim=-1)
         return float(probs.max().item())
 
-    def expression(self):
-        selected_dim = self.selected_dim()
-        confidence = self.selection_confidence()
-        # scale = float(self.scaling_param[selected_dim].detach().item())
-        # bias = float(self.bias_param.detach().item())
-        # bias_sign = "+" if bias >= 0 else "-"
-        return f"x[{selected_dim}] (conf: {confidence:.2f})" # {bias_sign} {abs(bias):.3f}"
+    def __str__(self):
+        selected_dim = self._selected_dim()
+        confidence = self._selection_confidence()
+        return f"x[{selected_dim}] (conf: {confidence:.2f})" 
     
 
 class FEX(nn.Module):
@@ -128,17 +118,6 @@ class FEX(nn.Module):
         self.parent_node.to(device)
         return self
     
-    def freeze_b(self):
-        def action(node: Node):
-            if node.operation_type == "unary":
-                node.operation.b.requires_grad = False
-        traverse(self.parent_node, action)
-
-    def unfreeze_b(self):
-        def action(node: Node):
-            if node.operation_type == "unary":
-                node.operation.b.requires_grad = True
-        traverse(self.parent_node, action)
 
 
     """ Overload train/eval to propogate to tree nodes"""
@@ -200,7 +179,7 @@ class FEX(nn.Module):
 
     
     def __str__(self):
-        leaf_expressions = [leaf_mlp.expression() for leaf_mlp in self.leaf_mlps]
+        leaf_expressions = [str(leaf_mlp) for leaf_mlp in self.leaf_mlps]
         return self.parent_node.__str__(leaf_expressions=leaf_expressions)
     
 

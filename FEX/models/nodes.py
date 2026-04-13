@@ -15,12 +15,9 @@ class UnaryOperation(nn.Module):
         self.b = nn.Parameter(1.5 * torch.randn((1)))
         self.op = op
 
-        
     def forward(self, x: torch.Tensor):
-        return self.a * self.op(x) + self.b #  + x - x.detach()
+        return self.a * self.op(x) + self.b
     
-
-
 
 class BinaryOperation(nn.Module):
     def __init__(self, op: Callable):
@@ -98,7 +95,7 @@ class Node:
             if device is not None:
                 new_op.to(device)
         else:
-            new_op = self.operation  # for leaves or non-module ops
+            new_op = self.operation # for leaves or non-module ops
 
         node = Node(
             operation_type=self.operation_type,
@@ -113,12 +110,6 @@ class Node:
             node.to(device)
         return node
 
-    def freeze_b(self):
-        if self.operation_type == "unary":
-            self.operation.b.requires_grad = False
-    def unfreeze_b(self):
-        if self.operation_type == "unary":
-            self.operation.b.requires_grad = True
 
     def _get_a_and_b(self):
         if self.operation_type == "unary":
@@ -139,12 +130,3 @@ class Node:
         elif self.operation_type == "binary":
             return f"({self.left.__str__(leaf_expressions)} {self.operation.op.__name__} {self.right.__str__(leaf_expressions)})"
         
-    """externally defined member function helpers"""
-    """
-    from ..training.tree_helpers import visualize_tree, node_load_state_dict, node_state_dict
-
-    visualize_tree = visualize_tree
-    load_state_dict = node_load_state_dict
-    state_dict = node_state_dict
-    """
-
