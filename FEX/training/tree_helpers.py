@@ -164,7 +164,7 @@ def visualize_tree_inorder(node, filename=None, format="png", leaf_transforms=No
 def visualize_tree(fex, filename=None, format="png"):
         leaf_transforms=[]
         for leaf_idx, leaf_mlp in enumerate(fex.leaf_mlps):
-            mlp_str = f"leaf{leaf_idx}: {leaf_mlp.expression()}"
+            mlp_str = f"leaf{leaf_idx}: {str(leaf_mlp)}"
             leaf_transforms.append(mlp_str)
 
         return visualize_tree_inorder(

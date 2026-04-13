@@ -67,6 +67,7 @@ class FEXConfig():
     
     def __post_init__(self):
         self.tau_anneal_epochs = int(self.num_epochs * 0.75)
+        self.set_hard_at_epoch = int(self.num_epochs * 0.75)
 
 
 runtimeconfig = RunTimeConfig()
