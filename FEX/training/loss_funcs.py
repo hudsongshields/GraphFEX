@@ -45,12 +45,7 @@ def group_loss(batch_x, batch_dy_val, group_indices, self_tree, inter_tree, adj_
 
         return loss
 
-def mag_entropy_regularization(fex: FEX):
-    params = fex.tree_mags()
-    mags = torch.stack(params)
-    probs = F.softmax(mags, dim=0)
-    entropy = -(probs * torch.log(probs + 1e-8)).sum()
-    return entropy
+
 
 def mag_reverse_l2_regularization(fex: FEX):
     params = fex.tree_mags()

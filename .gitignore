@@ -9,4 +9,7 @@ logs/
 *.csv
 *.log
 FEX/training/testing/
-FEX/training/debug/
+FEX/training/debug/*
+!FEX/training/debug/debug_tree_configs.py
+new_data/
+results/
