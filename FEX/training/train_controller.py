@@ -24,6 +24,10 @@ inter_ops_per_node = None
 inter_fex_kwargs = None
 fex_kwargs = None
 
+dataloader_global = None
+adj_matrix_global = None
+fex_config_global = None
+
 class CandidatePoolManager(BaseManager): pass
 CandidatePoolManager.register('GraphPoolCandidate', GraphPoolCandidate)
 CandidatePoolManager.register('GraphPool', GraphPool)
@@ -39,14 +43,13 @@ def eval_candidate(k_cand, op_indices,top_epoch_cands, epoch):
     score = train_network_fex(
         forcing_fex,
         inter_fex,
-        dataloader,
-        adj_matrix,
-        config=fex_config,
+        dataloader_global,
+        adj_matrix_global,
+        config=fex_config_global,
     )
     score = score.detach().item() if isinstance(score, torch.Tensor) else float(score)
     if not math.isfinite(score):
         reward = 0.0
-        train_logger.warning("Epoch %s, Candidate %s produced non-finite score; assigning zero reward.", epoch, k_cand,)
     else:
         reward = 1.0 / math.sqrt(1.0 + score)
 
@@ -62,10 +65,27 @@ def eval_candidate(k_cand, op_indices,top_epoch_cands, epoch):
     inter_fex_str = str(inter_fex)
     return score, self_fex_str, inter_fex_str
 
+def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, adj_matrix, fex_config):
+    global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs
+    global dataloader_global, adj_matrix_global, fex_config_global
+
+    self_ops_per_node = self_ops
+    inter_ops_per_node = inter_ops
+    fex_kwargs = fex_kwargs_input
+    inter_fex_kwargs = inter_fex_kwargs_input
+    dataloader_global = dataloader
+    adj_matrix_global = adj_matrix
+    fex_config_global = fex_config
+
 
 def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig):
     train_logger = runtimeconfig.train_logger
-    global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs
+    
+    global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global
+    dataloader_global = dataloader
+    adj_matrix_global = adj_matrix
+    fex_config_global = fex_config
+
     self_ops_per_node = self_fex_struct.ops_per_node
     inter_ops_per_node = inter_fex_struct.ops_per_node
     controller = Controller(
@@ -94,13 +114,14 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
 
     hardware_threads = mp.cpu_count()
     num_threads = min(hardware_threads, config.num_cands_per_epoch)
+    print(f"Using {num_threads} parallel processes for candidate evaluation (hardware threads: {hardware_threads})")
 
     for epoch in range(config.num_epochs):
         optimizer.zero_grad()
         num_cands = config.num_cands_per_epoch
         threshold = config.percentile_threshold
         thresh_idx = int(threshold * num_cands)
-        log_probs = torch.zeros(num_cands).to(runtimeconfig.device)
+        log_probs = []
         pmfs = controller(controller_input)
         op_indices_list =[]
         for k_cand in range(num_cands):
@@ -108,12 +129,12 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
             op_indices_list.append(op_indices)
             chosen_probs = torch.stack([pmfs[i].squeeze(0)[op_indices[i]] for i in range(len(op_indices))])
             log_prob = torch.log(chosen_probs).sum()
-            log_probs[k_cand] = log_prob
+            log_probs.append(log_prob)
 
         with CandidatePoolManager() as manager:
             top_epoch_cands = manager.GraphPool(pool_size=thresh_idx)
-            with mp.Pool(processes=num_threads) as pool:
-                scores, self_equations, inter_equations = pool.starmap(eval_candidate, [(k_cand, op_indices_list[k_cand], top_epoch_cands, epoch) for k_cand in range(num_cands)])
+            with mp.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global)) as pool:
+                results = pool.starmap(eval_candidate, [(k_cand, op_indices_list[k_cand], top_epoch_cands, epoch) for k_cand in range(num_cands)])
 
         train_logger.debug(f"Epoch {epoch} pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
 
