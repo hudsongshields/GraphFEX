@@ -18,7 +18,7 @@ def leaf_entropy(fex: FEX):
     return total
 
 
-def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_matrix, config: FEXConfig, use_entropy: bool = True):
+def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_matrix, config: FEXConfig, use_entropy: bool = True, verbose: bool = False):
     forcing_tree.train()
     inter_dynam_tree.train()
     forcing_tree_params = list(forcing_tree.all_parameters())
@@ -26,7 +26,6 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
 
     adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr, betas=(0.95, 0.999), weight_decay=config.weight_decay)
     adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr, betas=(0.95, 0.999), weight_decay=config.weight_decay)
-    train_logger = runtimeconfig.train_logger
 
     scheduler_self = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         adam_optim_self,
@@ -50,7 +49,9 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     best_epoch_loss = float('inf')
     best_forcing_tree = None
     best_inter_tree = None
-    train_logger.debug(f'Initial Equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}')
+    if verbose:
+        train_logger = runtimeconfig.train_logger
+        train_logger.debug(f'Initial Equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}')
 
     inter_dynam_tree.train()
     forcing_tree.train()
@@ -60,7 +61,6 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
         current_tau = config.tau_start + (config.tau_end - config.tau_start) * progress
         forcing_tree.set_leaf_tau(current_tau)
         inter_dynam_tree.set_leaf_tau(current_tau)
-        train_logger.debug(f"Epoch {epoch+1}/{config.num_epochs}, Tau: {current_tau:.4f}")
 
         
         if epoch == int(config.set_hard_at_epoch):
@@ -120,8 +120,10 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             best_forcing_tree = forcing_tree.copy_inorder()
             best_inter_tree = inter_dynam_tree.copy_inorder()
 
-        train_logger.info(f"Adam Epoch {epoch+1}/{config.num_epochs}, Loss: {mean_epoch_loss:.4f}")
-        train_logger.debug(f"Current equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}")
+        if verbose:
+            train_logger.debug(f"Epoch {epoch+1}/{config.num_epochs}, Tau: {current_tau:.4f}")
+            train_logger.info(f"Adam Epoch {epoch+1}/{config.num_epochs}, Loss: {mean_epoch_loss:.4f}")
+            train_logger.debug(f"Current equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}")
     
 
     forcing_tree = best_forcing_tree.to(runtimeconfig.device)
@@ -167,12 +169,12 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
 
         bfgs_loss = bfgs_optim.step(closure)
         bfgs_loss_val = bfgs_loss.item() if isinstance(bfgs_loss, torch.Tensor) else float(bfgs_loss)
-        train_logger.info(f"BFGS Completed (max_iter={config.bfgs_epochs}), Loss: {bfgs_loss_val:.4f}")
+        # train_logger.info(f"BFGS Completed (max_iter={config.bfgs_epochs}), Loss: {bfgs_loss_val:.4f}")
 
         if not math.isfinite(bfgs_loss_val):
-            train_logger.warning(f"BFGS produced non-finite loss: {bfgs_loss_val}")
+            # train_logger.warning(f"BFGS produced non-finite loss: {bfgs_loss_val}")
             if best_epoch_loss != float('inf'):
-                train_logger.info(f"Returning best epoch loss from Adam phase: {best_epoch_loss:.4f}")
+                # train_logger.info(f"Returning best epoch loss from Adam phase: {best_epoch_loss:.4f}")
                 return best_epoch_loss
             return float('inf')
 
@@ -180,14 +182,14 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             best_epoch_loss = bfgs_loss_val
             best_forcing_tree = forcing_tree.copy_inorder()
             best_inter_tree = inter_dynam_tree.copy_inorder()
-    else:
-        train_logger.info("Skipping BFGS phase as bfgs_epochs is set to 0")
+    # else:
+        # train_logger.info("Skipping BFGS phase as bfgs_epochs is set to 0")
 
     forcing_tree = best_forcing_tree.to(runtimeconfig.device)
     inter_dynam_tree = best_inter_tree.to(runtimeconfig.device)
 
-    train_logger.debug(f"Final Forcing Tree Equation: {forcing_tree}")
-    train_logger.debug(f"Final Inter Tree Equation: {inter_dynam_tree}")
+    # train_logger.debug(f"Final Forcing Tree Equation: {forcing_tree}")
+    # train_logger.debug(f"Final Inter Tree Equation: {inter_dynam_tree}")
 
     return float(best_epoch_loss)
 
