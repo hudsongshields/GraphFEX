@@ -2,13 +2,10 @@ import torch
 import torch.nn as nn
 
 class Controller(nn.Module):
-    def __init__(self, ops_per_node: list[int], num_trees: int, input_size: int, hidden_size: int):
+    def __init__(self, ops_per_node: list[int], input_size: int, hidden_size: int):
         super().__init__()
         
         self.ops_per_node = ops_per_node
-        self.num_trees = num_trees
-
-        self.ops_per_node = ops_per_node * num_trees
 
 
         self.net = nn.Sequential(

@@ -50,24 +50,28 @@ class FEXConfig():
     num_groups: int = 1
     leaf_dim: int = None
     num_leaves: int = None
+    leaf_entropy_weight: float = 0.8
+    decay_entropy_until: float = 1.0
+    set_hard_at: float = 1.1
 
     lr: float = 0.02
     inter_lr: float = 0.008
-    leaf_lr: float = None  # separate LR for leaf logits (defaults to lr if None)
-    num_epochs: int = 15
+    num_epochs: int = 30
+    weight_decay: float = 0.0
 
     bfgs_epochs: int = 15
-    bfgs_lr: float = 0.1
+    bfgs_lr: float = 0.8
 
     tau_start: float = 8.0
-    tau_end: float = 0.02
+    tau_end: float = 4.0
 
     # Regularization
-    mag_entropy_weight: float = 0.03 # weight for magnitude entropy regularization
+    mag_entropy_weight: float = 0.0 # weight for magnitude entropy regularization
+    pct_cosine_restart: float = 1.0
     
     def __post_init__(self):
-        self.tau_anneal_epochs = int(self.num_epochs * 0.75)
-        self.set_hard_at_epoch = int(self.num_epochs * 0.75)
+        self.tau_anneal_epochs = self.num_epochs
+        self.set_hard_at_epoch = int(self.num_epochs * self.set_hard_at) # default: Dont set hard
 
 
 runtimeconfig = RunTimeConfig()

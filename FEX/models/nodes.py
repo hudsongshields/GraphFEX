@@ -10,9 +10,10 @@ import copy
 class UnaryOperation(nn.Module):
     def __init__(self, op: Callable):
         super().__init__()
+        self.scale = 1.5
 
-        self.a = nn.Parameter(torch.empty((1)).uniform_(0.1, 4.0))
-        self.b = nn.Parameter(1.5 * torch.randn((1)))
+        self.a = nn.Parameter(torch.randn((1)) * self.scale)
+        self.b = nn.Parameter(torch.randn((1)) * self.scale)
         self.op = op
 
     def forward(self, x: torch.Tensor):
@@ -76,6 +77,18 @@ class Node:
             self.right.to(device)
         return self
     
+    def reset(self):
+        if isinstance(self.operation, nn.Module):
+            if self.operation_type == "unary":
+                if hasattr(self.operation, 'a'):
+                    self.operation.a.data.copy_(torch.randn_like(self.operation.a) * getattr(self.operation, 'scale', 1.0))
+                if hasattr(self.operation, 'b'):
+                    self.operation.b.data.copy_(torch.randn_like(self.operation.b) * getattr(self.operation, 'scale', 1.0))
+        if self.left is not None:
+            self.left.reset()
+        if self.right is not None:
+            self.right.reset()
+    
     def copy_inorder(self):
         # Avoid deepcopy on nn.Modules and tensors; use state_dict/load_state_dict for safe copying
         device = None
@@ -110,13 +123,6 @@ class Node:
             node.to(device)
         return node
 
-
-    def _get_a_and_b(self):
-        if self.operation_type == "unary":
-            op = self.operation
-            a = op.a
-            b = op.b
-            return a.item(), b.item()
         
     def __str__(self, leaf_expressions=None):
         if self.operation_type == "leaf":
@@ -125,7 +131,7 @@ class Node:
             else:
                 return f"x{self.leaf_idx}"
         elif self.operation_type == "unary":
-            a, b = self._get_a_and_b()
+            a, b = self.operation.a.detach().item(), self.operation.b.detach().item()
             return f"({a:.3f} * {self.operation.op.__name__}({self.left.__str__(leaf_expressions)}) + {b:.3f})"
         elif self.operation_type == "binary":
             return f"({self.left.__str__(leaf_expressions)} {self.operation.op.__name__} {self.right.__str__(leaf_expressions)})"
