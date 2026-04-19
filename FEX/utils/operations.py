@@ -10,22 +10,18 @@ def identity(x):
 
 
 def square(x):
-    # x = torch.clamp(x, min=-POLY_CLAMP, max=POLY_CLAMP)
     return torch.square(x)
 
 
 def cube(x):
-    # x = torch.clamp(x, min=-POLY_CLAMP, max=POLY_CLAMP)
     return torch.pow(x, 3)
 
 
 def fourth_power(x):
-    # x = torch.clamp(x, min=-POLY_CLAMP, max=POLY_CLAMP)
     return torch.pow(x, 4)
 
 
 def safe_exp(x):
-    # x = torch.clamp(x, min=-10.0, max=10.0)
     return torch.exp(x)
 
 

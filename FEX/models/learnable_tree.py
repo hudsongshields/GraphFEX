@@ -95,6 +95,27 @@ class FEX(nn.Module):
         yield from self.parameters()
         yield from self.parent_node.get_parameters()
 
+    def reset(self, fex_config=None):
+        if fex_config is not None and hasattr(fex_config, 'tau_start'):
+            tau_value = float(fex_config.tau_start)
+        else:
+            tau_value = 5.0
+
+        for leaf in self.leaf_mlps:
+            if hasattr(leaf, 'reset_parameters'):
+                leaf.reset_parameters()
+            if hasattr(leaf, 'logits'):
+                nn.init.normal_(leaf.logits, mean=0.0, std=0.1)
+            if hasattr(leaf, 'tau'):
+                leaf.tau.fill_(tau_value)
+            if hasattr(leaf, 'hard'):
+                leaf.hard = False
+
+        # Reset all tree node parameters as in their constructor, but keep structure
+        def action(node: Node):
+            node.reset()
+        traverse(self.parent_node, action)
+
     def leaf_params(self):
         """Parameters controlling leaf dimension selection (logits + sigma)."""
         for leaf_mlp in self.leaf_mlps:
@@ -147,7 +168,7 @@ class FEX(nn.Module):
             leaf_mlp.set_hard(hard)
     
 
-    # _tree_config_name: Helper to identify which tree config was used for this FEX instance
+    # helper to identify which tree config was used for this FEX instance
     def _tree_config_name(self):
         if self.tree_structure is None:
             return None
@@ -181,6 +202,11 @@ class FEX(nn.Module):
     def __str__(self):
         leaf_expressions = [str(leaf_mlp) for leaf_mlp in self.leaf_mlps]
         return self.parent_node.__str__(leaf_expressions=leaf_expressions)
+    
+    """ external member functions """
+    def visualize_tree(self, directory: str = "fex_tree_viz", clear_directory: bool = True):
+        from ..training.tree_helpers import visualize_tree as vis
+        return vis(self, directory, clear_directory)
     
 
 

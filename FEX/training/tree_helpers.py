@@ -140,7 +140,7 @@ def visualize_tree_inorder(node, filename=None, format="png", leaf_transforms=No
         elif node.operation_type == "binary":
             label = f"binary: {safe_op_name(node.operation.op)}"
         elif node.operation_type == "unary":
-            a, b = node._get_a_and_b()
+            a, b = node.operation.a.item(), node.operation.b.item()
             label = f"{a:.3f} * {safe_op_name(node.operation.op)} + {b:.3f}"
         dot.node(node_id, label=label)
 
