@@ -28,11 +28,8 @@ dataloader_global = None
 adj_matrix_global = None
 fex_config_global = None
 
-class CandidatePoolManager(BaseManager): pass
-CandidatePoolManager.register('GraphPoolCandidate', GraphPoolCandidate)
-CandidatePoolManager.register('GraphPool', GraphPool)
 
-def eval_candidate(k_cand, op_indices,top_epoch_cands, epoch):
+def eval_candidate(k_cand, op_indices):
 
     forcing_op_indices = op_indices[:len(self_ops_per_node)]
     inter_dynam_op_indices = op_indices[len(self_ops_per_node):len(self_ops_per_node) + len(inter_ops_per_node)]
@@ -55,15 +52,15 @@ def eval_candidate(k_cand, op_indices,top_epoch_cands, epoch):
 
     for param in forcing_fex.parameters():
         param.requires_grad = False
+        param.data = param.data.cpu()
     for param in inter_fex.parameters():
         param.requires_grad = False
+        param.data = param.data.cpu()
+    
+    inter_fex = inter_fex.cpu()
+    forcing_fex = forcing_fex.cpu()
 
-    candidate = GraphPoolCandidate(inter_tree=inter_fex, forcing_tree=forcing_fex, reward=reward, id=k_cand)
-    top_epoch_cands.add_new(candidate)
-
-    self_fex_str = str(forcing_fex)
-    inter_fex_str = str(inter_fex)
-    return score, self_fex_str, inter_fex_str
+    return op_indices.cpu(), reward, k_cand
 
 def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, adj_matrix, fex_config):
     global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs
@@ -78,7 +75,7 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
     fex_config_global = fex_config
 
 
-def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig):
+def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, num_processes: int = None):
     train_logger = runtimeconfig.train_logger
     
     global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global
@@ -113,7 +110,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
     best_candidates = GraphPool(pool_size=10)
 
     hardware_threads = mp.cpu_count()
-    num_threads = min(hardware_threads, config.num_cands_per_epoch)
+    num_threads = min(hardware_threads, config.num_cands_per_epoch) if num_processes is None else num_processes
     print(f"Using {num_threads} parallel processes for candidate evaluation (hardware threads: {hardware_threads})")
 
     for epoch in range(config.num_epochs):
@@ -131,10 +128,15 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
             log_prob = torch.log(chosen_probs).sum()
             log_probs.append(log_prob)
 
-        with CandidatePoolManager() as manager:
-            top_epoch_cands = manager.GraphPool(pool_size=thresh_idx)
-            with mp.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global)) as pool:
-                results = pool.starmap(eval_candidate, [(k_cand, op_indices_list[k_cand], top_epoch_cands, epoch) for k_cand in range(num_cands)])
+        top_epoch_cands = GraphPool(pool_size=thresh_idx)
+        with mp.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global)) as pool:
+            results = pool.starmap(eval_candidate, [(k_cand, op_indices_list[k_cand]) for k_cand in range(num_cands)])
+
+        for op_indices, reward, k_cand in results:
+            inter_tree = FEX(sample_indices=op_indices[len(self_ops_per_node):len(self_ops_per_node) + len(inter_ops_per_node)], **inter_fex_kwargs)
+            forcing_tree = FEX(sample_indices=op_indices[:len(self_ops_per_node)], **fex_kwargs)
+            candidate = GraphPoolCandidate(inter_tree=inter_tree, forcing_tree=forcing_tree, reward=reward, id=k_cand)
+            top_epoch_cands.add_new(candidate)
 
         train_logger.debug(f"Epoch {epoch} pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
 
