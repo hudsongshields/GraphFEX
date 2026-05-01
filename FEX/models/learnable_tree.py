@@ -206,7 +206,7 @@ class FEX(nn.Module):
     """ external member functions """
     def visualize_tree(self, directory: str = "fex_tree_viz", clear_directory: bool = True):
         from ..training.tree_helpers import visualize_tree as vis
-        return vis(self, directory, clear_directory)
+        return vis(self, filename=directory)
     
 
 
