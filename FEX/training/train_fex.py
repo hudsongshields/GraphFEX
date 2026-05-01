@@ -155,16 +155,16 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
         def closure():
             bfgs_optim.zero_grad()
 
-            total_loss = 0.0
+            accumulated_loss = 0.0
             total_pred_error = 0.0
             for batch_x, batch_dy_val in bfgs_batches:
                 pred_error = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges)
                 entropy_error = config.leaf_entropy_weight * (leaf_entropy(forcing_tree) + leaf_entropy(inter_dynam_tree))
                 entropy_error += config.mag_entropy_weight * (mag_reverse_l2_regularization(forcing_tree) + mag_reverse_l2_regularization(inter_dynam_tree))
-                total_loss = total_loss + pred_error + entropy_error
+                accumulated_loss = accumulated_loss + pred_error + entropy_error
                 total_pred_error = total_pred_error + pred_error.detach().item()
 
-            total_loss.backward()
+            accumulated_loss.backward()
             return total_pred_error / len(bfgs_batches)
 
         bfgs_loss = bfgs_optim.step(closure)
