@@ -5,7 +5,6 @@ __pycache__/
 .vscode/
 .DS_Store
 logs/
-*.csv
 *.log
 FEX/training/testing/
 FEX/training/debug/*
