@@ -5,15 +5,12 @@ dependencies:
   - python=3.11
   - numpy
   - pandas
-  - scipy
-  - scikit-learn
-  - xgboost
   - matplotlib
   - seaborn
   - plotly
-  - yfinance
   - ipykernel
   - nbformat
   - graphviz
   - python-graphviz
+  - git-lfs
   - pip
