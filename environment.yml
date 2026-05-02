@@ -1,20 +1,19 @@
 name: eccentric_env
 channels:
   - conda-forge
-  - defaults
-  - https://repo.anaconda.com/pkgs/main
-  - https://repo.anaconda.com/pkgs/r
-  - https://repo.anaconda.com/pkgs/msys2
 dependencies:
+  - python=3.11
   - numpy
-  - ipykernel
   - pandas
+  - scipy
   - scikit-learn
   - xgboost
   - matplotlib
-  - nbformat
-  - graphviz
+  - seaborn
   - plotly
   - yfinance
-  - seaborn
-prefix: C:\Users\hudso\anaconda3\envs\eccentric_env
+  - ipykernel
+  - nbformat
+  - graphviz
+  - python-graphviz
+  - pip
