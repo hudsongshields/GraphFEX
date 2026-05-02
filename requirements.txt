@@ -122,9 +122,7 @@ webencodings @ file:///home/conda/feedstock_root/build_artifacts/webencodings_17
 wheel==0.45.1
 win_inet_pton @ file:///D:/bld/win_inet_pton_1733130564612/work
 wrapt @ file:///C:/b/abs_68gzx33lzh/croot/wrapt_1736543196433/work
-xgboost @ file:///C:/b/abs_d97hy_84m6/croot/xgboost-split_1749630932152/work/python-package
 xxhash==3.6.0
 yarl==1.23.0
-yfinance @ file:///home/conda/feedstock_root/build_artifacts/yfinance_1745889389907/work
 zipp @ file:///C:/b/abs_2fcpcg89my/croot/zipp_1732630746332/work
 zstandard==0.25.0

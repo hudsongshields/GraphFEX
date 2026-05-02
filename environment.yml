@@ -1,4 +1,4 @@
-name: eccentric_env
+name: graphfex_env
 channels:
   - conda-forge
 dependencies:
