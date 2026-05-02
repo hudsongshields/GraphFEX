@@ -29,14 +29,18 @@ dataloader_global = None
 adj_matrix_global = None
 fex_config_global = None
 
+num_gpus = torch.cuda.device_count()
+
 
 def eval_candidate(k_cand, op_indices):
+    gpu_id = k_cand % num_gpus
+    device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
 
     forcing_op_indices = op_indices[:len(self_ops_per_node)]
     inter_dynam_op_indices = op_indices[len(self_ops_per_node):len(self_ops_per_node) + len(inter_ops_per_node)]
 
-    inter_fex = FEX(sample_indices=inter_dynam_op_indices, **inter_fex_kwargs).to(runtimeconfig.device)
-    forcing_fex = FEX(sample_indices=forcing_op_indices, **fex_kwargs).to(runtimeconfig.device)
+    inter_fex = FEX(sample_indices=inter_dynam_op_indices, **inter_fex_kwargs).to(device)
+    forcing_fex = FEX(sample_indices=forcing_op_indices, **fex_kwargs).to(device)
 
     score = train_network_fex(
         forcing_fex,
@@ -61,7 +65,7 @@ def eval_candidate(k_cand, op_indices):
     inter_fex = inter_fex.cpu()
     forcing_fex = forcing_fex.cpu()
 
-    return op_indices.cpu(), reward, k_cand
+    return torch.tensor(op_indices).cpu(), reward, k_cand
 
 def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, adj_matrix, fex_config):
     global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs

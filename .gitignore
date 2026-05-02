@@ -11,3 +11,4 @@ FEX/training/debug/*
 !FEX/training/debug/debug_tree_configs.py
 new_data/
 results/
+shell_scripts/
