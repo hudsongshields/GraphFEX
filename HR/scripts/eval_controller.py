@@ -102,20 +102,23 @@ def main():
         input_dim=20,
         hidden_dim=64,
         lr=0.001,
-        num_epochs=10,
-        num_cands_per_epoch=10,
+        num_epochs=3,
+        num_cands_per_epoch=9,
         percentile_threshold=0.4,
         num_trees=2,
     )
 
     fex_config = FEXConfig(
-        num_epochs=100,
+        num_epochs=1000,
         bfgs_epochs=0,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
         num_leaves=forcing_tree_config.num_leaves,
         weight_decay=0.0,
-        mag_entropy_weight=0.6,
+        mag_entropy_weight=1e-4,
+        pct_cosine_restart=0.5,
+        tau_start=5.0,
+        tau_end=0.1,
     )
 
     best_candidates = train_network_controller(
