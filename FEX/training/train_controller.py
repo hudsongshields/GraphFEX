@@ -138,7 +138,9 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
             log_probs.append(log_prob)
 
         top_epoch_cands = GraphPool(pool_size=thresh_idx)
-        with mp.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global)) as pool:
+
+        context = mp.get_context("spawn")
+        with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global)) as pool:
             results = pool.starmap(eval_candidate, [(k_cand, op_indices_list[k_cand]) for k_cand in range(num_cands)])
 
         for op_indices, reward, k_cand in results:
