@@ -118,9 +118,9 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
     if slurm_cpus is not None:
         num_processes = int(slurm_cpus)
         train_logger.info(f"Detected SLURM environment with {num_processes} CPUs allocated for this task. Using {num_processes} parallel processes for candidate evaluation.")
-    else: hardware_threads = mp.cpu_count()
-    num_threads = min(hardware_threads, config.num_cands_per_epoch) if num_processes is None else num_processes
-    print(f"Using {num_threads} parallel processes for candidate evaluation (hardware threads: {hardware_threads})")
+    else: num_processes = mp.cpu_count()
+    num_threads = min(mp.cpu_count(), config.num_cands_per_epoch) if num_processes is None else num_processes
+    print(f"Using {num_threads} parallel processes for candidate evaluation (hardware threads: {mp.cpu_count()})")
 
     for epoch in range(config.num_epochs):
         optimizer.zero_grad()
