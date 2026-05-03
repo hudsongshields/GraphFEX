@@ -18,7 +18,7 @@ def leaf_entropy(fex: FEX):
     return total
 
 
-def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_matrix, config: FEXConfig, use_entropy: bool = True, verbose: bool = False):
+def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_matrix, config: FEXConfig, device=runtimeconfig.device, use_entropy: bool = True, verbose: bool = False):
     forcing_tree.train()
     inter_dynam_tree.train()
     forcing_tree_params = list(forcing_tree.all_parameters())
@@ -42,8 +42,8 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     # Precompute edge indices - used by both group_loss
     nodes, edges = adj_matrix.nonzero(as_tuple=True)
     interaction_indices = nodes != edges
-    nodes = nodes[interaction_indices].to(runtimeconfig.device)
-    edges = edges[interaction_indices].to(runtimeconfig.device)
+    nodes = nodes[interaction_indices].to(device)
+    edges = edges[interaction_indices].to(device)
 
 
     best_epoch_loss = float('inf')
@@ -74,12 +74,12 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
         num_batches = 0
         for batch_x, batch_dy_val in dataloader:
             batch_dy_val = batch_dy_val[:, :, 0:1]  # only learn first dim of dx/dt
-            if runtimeconfig.device == 'cuda':
-                batch_x = batch_x.to(runtimeconfig.device, non_blocking=True)
-                batch_dy_val = batch_dy_val.to(runtimeconfig.device, non_blocking=True)
+            if device == 'cuda':
+                batch_x = batch_x.to(device, non_blocking=True)
+                batch_dy_val = batch_dy_val.to(device, non_blocking=True)
             else:
-                batch_x = batch_x.to(runtimeconfig.device)
-                batch_dy_val = batch_dy_val.to(runtimeconfig.device)
+                batch_x = batch_x.to(device)
+                batch_dy_val = batch_dy_val.to(device)
             # group_indices = torch.arange(batch_x.size(1), device=batch_x.device)  # use all nodes
 
             adam_optim_self.zero_grad()
@@ -126,8 +126,8 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             train_logger.debug(f"Current equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}")
     
 
-    forcing_tree = best_forcing_tree.to(runtimeconfig.device)
-    inter_dynam_tree = best_inter_tree.to(runtimeconfig.device)
+    forcing_tree = best_forcing_tree.to(device)
+    inter_dynam_tree = best_inter_tree.to(device)
 
     if config.bfgs_epochs > 0:
         all_parameters = list(forcing_tree.all_parameters()) + list(inter_dynam_tree.all_parameters())
@@ -143,12 +143,12 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
         for batch_x, batch_dy_val in dataloader:
             batch_dy_val = batch_dy_val[:, :, 0:1]
 
-            if runtimeconfig.device == 'cuda':
-                batch_x = batch_x.to(runtimeconfig.device, non_blocking=True)
-                batch_dy_val = batch_dy_val.to(runtimeconfig.device, non_blocking=True)
+            if device == 'cuda':
+                batch_x = batch_x.to(device, non_blocking=True)
+                batch_dy_val = batch_dy_val.to(device, non_blocking=True)
             else:
-                batch_x = batch_x.to(runtimeconfig.device)
-                batch_dy_val = batch_dy_val.to(runtimeconfig.device)
+                batch_x = batch_x.to(device)
+                batch_dy_val = batch_dy_val.to(device)
 
             bfgs_batches.append((batch_x, batch_dy_val))
 
@@ -185,8 +185,8 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     # else:
         # train_logger.info("Skipping BFGS phase as bfgs_epochs is set to 0")
 
-    forcing_tree = best_forcing_tree.to(runtimeconfig.device)
-    inter_dynam_tree = best_inter_tree.to(runtimeconfig.device)
+    forcing_tree = best_forcing_tree.to(device)
+    inter_dynam_tree = best_inter_tree.to(device)
 
     # train_logger.debug(f"Final Forcing Tree Equation: {forcing_tree}")
     # train_logger.debug(f"Final Inter Tree Equation: {inter_dynam_tree}")

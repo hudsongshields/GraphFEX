@@ -109,7 +109,7 @@ def main():
     )
 
     fex_config = FEXConfig(
-        num_epochs=1000,
+        num_epochs=100,
         bfgs_epochs=0,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],

@@ -29,12 +29,12 @@ dataloader_global = None
 adj_matrix_global = None
 fex_config_global = None
 
-num_gpus = torch.cuda.device_count()
 
-
-def eval_candidate(k_cand, op_indices):
-    gpu_id = k_cand % num_gpus
-    device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
+def eval_candidate(k_cand, gpu_id, op_indices):
+    if gpu_id is not None and torch.cuda.is_available():
+        device = torch.device(f"cuda:{gpu_id}")
+    else:
+        device = torch.device("cpu")
 
     forcing_op_indices = op_indices[:len(self_ops_per_node)]
     inter_dynam_op_indices = op_indices[len(self_ops_per_node):len(self_ops_per_node) + len(inter_ops_per_node)]
@@ -48,6 +48,7 @@ def eval_candidate(k_cand, op_indices):
         dataloader_global,
         adj_matrix_global,
         config=fex_config_global,
+        device=device,
     )
     score = score.detach().item() if isinstance(score, torch.Tensor) else float(score)
     if not math.isfinite(score):
@@ -66,7 +67,8 @@ def eval_candidate(k_cand, op_indices):
     forcing_fex = forcing_fex.cpu()
     if k_cand == 0:
         train_logger.info(f"Sampled candidate {k_cand} with score {score:.4f}\n self dynamics: {forcing_fex}\n inter dynamics: {inter_fex}")
-    return torch.tensor(op_indices).cpu(), reward, k_cand
+    return op_indices, reward, k_cand
+
 
 def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, adj_matrix, fex_config):
     global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs
@@ -76,6 +78,7 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
     inter_ops_per_node = inter_ops
     fex_kwargs = fex_kwargs_input
     inter_fex_kwargs = inter_fex_kwargs_input
+    
     dataloader_global = dataloader
     adj_matrix_global = adj_matrix
     fex_config_global = fex_config
@@ -83,6 +86,7 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
 
 def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig):
     train_logger = runtimeconfig.train_logger
+    num_gpus = torch.cuda.device_count()
     
     global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global
     dataloader_global = dataloader
@@ -133,16 +137,18 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
         op_indices_list =[]
         for k_cand in range(num_cands):
             op_indices = epsilon_greedy_sample(pmfs, epsilon=0.1).squeeze(0)
-            op_indices_list.append(op_indices)
             chosen_probs = torch.stack([pmfs[i].squeeze(0)[op_indices[i]] for i in range(len(op_indices))])
             log_prob = torch.log(chosen_probs).sum()
             log_probs.append(log_prob)
+            
+            op_indices_list.append(op_indices.detach().clone().cpu())
 
         top_epoch_cands = GraphPool(pool_size=thresh_idx)
 
         context = mp.get_context("spawn")
+        gpu_ids = list(range(num_gpus)) if num_gpus > 0 else [None]
         with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global)) as pool:
-            results = pool.starmap(eval_candidate, [(k_cand, op_indices_list[k_cand]) for k_cand in range(num_cands)])
+            results = pool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
 
         for op_indices, reward, k_cand in results:
             inter_tree = FEX(sample_indices=op_indices[len(self_ops_per_node):len(self_ops_per_node) + len(inter_ops_per_node)], **inter_fex_kwargs)
