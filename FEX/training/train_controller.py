@@ -64,7 +64,8 @@ def eval_candidate(k_cand, op_indices):
     
     inter_fex = inter_fex.cpu()
     forcing_fex = forcing_fex.cpu()
-
+    if k_cand == 0:
+        train_logger.info(f"Sampled candidate {k_cand} with score {score:.4f}\n self dynamics: {forcing_fex}\n inter dynamics: {inter_fex}")
     return torch.tensor(op_indices).cpu(), reward, k_cand
 
 def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, adj_matrix, fex_config):
