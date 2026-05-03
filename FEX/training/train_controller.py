@@ -33,8 +33,10 @@ fex_config_global = None
 def eval_candidate(k_cand, gpu_id, op_indices):
     if gpu_id is not None and torch.cuda.is_available():
         device = torch.device(f"cuda:{gpu_id}")
+        train_logger.info(f"Evaluating candidate {k_cand} on GPU {gpu_id}")
     else:
         device = torch.device("cpu")
+        train_logger.info(f"Evaluating candidate {k_cand} on CPU")
 
     forcing_op_indices = op_indices[:len(self_ops_per_node)]
     inter_dynam_op_indices = op_indices[len(self_ops_per_node):len(self_ops_per_node) + len(inter_ops_per_node)]
@@ -122,10 +124,10 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
     slurm_cpus = os.getenv("SLURM_CPUS_PER_TASK")
     if slurm_cpus is not None:
         num_processes = int(slurm_cpus)
-        train_logger.info(f"Detected SLURM environment with {num_processes} CPUs allocated for this task. Using {num_processes} parallel processes for candidate evaluation.")
+        train_logger.info(f"Detected SLURM environment with {num_processes} CPUs allocated for this task")
     else: num_processes = mp.cpu_count()
     num_threads = min(mp.cpu_count(), config.num_cands_per_epoch) if num_processes is None else num_processes
-    print(f"Using {num_threads} parallel processes for candidate evaluation (hardware threads: {mp.cpu_count()})")
+    train_logger.info(f"Using {num_threads} parallel processes for candidate evaluation.")
 
     for epoch in range(config.num_epochs):
         optimizer.zero_grad()
