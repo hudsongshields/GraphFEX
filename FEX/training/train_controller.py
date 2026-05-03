@@ -81,7 +81,7 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
     fex_config_global = fex_config
 
 
-def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, num_processes: int = None):
+def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig):
     train_logger = runtimeconfig.train_logger
     
     global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global
