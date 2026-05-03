@@ -1,45 +1,43 @@
-import sys
+import os
 from pathlib import Path
 
-# resolve imports from the current working dir.
-cwd = Path.cwd().resolve()
-project_root = cwd.parent
-sys.path.insert(0, str(project_root))
-
-from FEX.utils.numerical_deriv import NumericalDeriv
-from FEX.training.train_controller import ControllerConfig, train_network_controller
-from FEX.training.train_configs import FEXConfig
-from FEX.training.train_configs import runtimeconfig
-from FEX.utils.tree_configs import get_tree_config
-
+import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, TensorDataset
-from FEX.utils.tree_configs import *
 
-# Initialize logger before training
-from pathlib import Path
-import os
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+from FEX.training.train_configs import FEXConfig, runtimeconfig
+from FEX.training.train_controller import ControllerConfig, train_network_controller
+from FEX.utils.numerical_deriv import NumericalDeriv
+from FEX.utils.tree_configs import get_tree_config
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+HR_DIR = SCRIPT_DIR.parent
+PROJECT_ROOT = HR_DIR.parent
+DATA_DIR = HR_DIR / "data"
 
 job_id = os.environ.get("SLURM_JOB_ID", "local")
-run_dir = PROJECT_ROOT / "logs" / f"run_{job_id}"
+run_dir = HR_DIR / "logs" / f"run_{job_id}"
 run_dir.mkdir(parents=True, exist_ok=True)
 
-log_path = str(run_dir / "controller_eval.log")
-runtimeconfig.CreateLogger(log_path, name="train_logger")
+log_path = run_dir / "controller_eval.log"
+runtimeconfig.CreateLogger(str(log_path), name="train_logger")
 
 forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
 inter_tree_config = get_tree_config("depth_2_tree_config")
 
-import pandas as pd
-import numpy as np
+adj_path = DATA_DIR / "BA_Nnodes100_Adj_deg_7_1.csv"
+if not adj_path.exists():
+    raise FileNotFoundError(f"Could not find adjacency matrix at: {adj_path}")
 
-# Update file paths to match train_fex.py
-adj_matrix = pd.read_csv('../data/BA_Nnodes100_Adj_deg_7_1.csv', header=None)
+adj_matrix = pd.read_csv(adj_path, header=None)
 num_graph_nodes = adj_matrix.shape[0]
 
-x_df = pd.read_csv('../data/HR_timeseries_BA_deg_7_1_SNR_45.csv', header=None)
+x_data_path = DATA_DIR / "HR_timeseries_BA_deg_7_1_SNR_45.csv"
+if not x_data_path.exists():
+    raise FileNotFoundError(f"Could not find timeseries data at: {x_data_path}")
+
+x_df = pd.read_csv(x_data_path, header=None)
 num_timesteps, num_cols = x_df.shape
 x_np = x_df.to_numpy(dtype=np.float32)
 x_data = torch.from_numpy(x_np.reshape(num_timesteps, num_graph_nodes, 3))

@@ -1,0 +1,9 @@
+[project]
+name = "graphfex"
+version = "0.1.0"
+description = "Finite Expression Method for Complex Graph Networks"
+authors = ["Hudson Shields"]
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["."]
