@@ -104,13 +104,13 @@ def main():
         hidden_dim=64,
         lr=0.001,
         num_epochs=800,
-        num_cands_per_epoch=9,
+        num_cands_per_epoch=12,
         percentile_threshold=0.5,
         num_trees=2,
     )
 
     fex_config = FEXConfig(
-        num_epochs=50,
+        num_epochs=60,
         bfgs_epochs=0,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
