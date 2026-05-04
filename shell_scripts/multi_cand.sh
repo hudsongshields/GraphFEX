@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=6
-#SBATCH --gpus=2
-#SBATCH --partition=hpg-b200
+#SBATCH --gpus=3
+#SBATCH --partition=hpg-turin
 #SBATCH --mem=20gb
 
 #SBATCH --time=12:00:00
