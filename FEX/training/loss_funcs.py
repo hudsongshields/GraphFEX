@@ -4,7 +4,7 @@ from ..models.learnable_tree import FEX
 import torch
 import torch.nn.functional as F
 
-def total_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_mat_nodes, adj_mat_edges):
+def total_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_mat_nodes, adj_mat_edges, scatter_idx=None):
 
         B = batch_x.size(0)
         G = batch_x.size(1)
@@ -24,8 +24,9 @@ def total_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_mat_nodes, adj_
         inter_out = inter_out.reshape(B, num_edges, 1)
 
         # scatter-sum interaction outputs to group positions
-        aligned_indices = (adj_mat_nodes.unsqueeze(1) == group_indices.unsqueeze(0)).int().argmax(dim=1)
-        local_idx = aligned_indices.unsqueeze(0).unsqueeze(-1).expand(B, num_edges, 1)
+        if scatter_idx is None:
+            scatter_idx = (adj_mat_nodes.unsqueeze(1) == group_indices.unsqueeze(0)).int().argmax(dim=1)
+        local_idx = scatter_idx.unsqueeze(0).unsqueeze(-1).expand(B, num_edges, 1)
         interaction_out = torch.zeros(B, G, 1, device=batch_x.device)
         interaction_out.scatter_add_(1, local_idx, inter_out) # sum contributions from all edges to each node
 

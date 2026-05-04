@@ -46,6 +46,9 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     nodes = nodes[interaction_indices].to(device)
     edges = edges[interaction_indices].to(device)
 
+    G = adj_matrix.size(0)
+    group_indices = torch.arange(G, device=device)
+    scatter_idx = (nodes.unsqueeze(1) == group_indices.unsqueeze(0)).int().argmax(dim=1)
 
     best_epoch_loss = float('inf')
     best_forcing_tree = None
@@ -88,7 +91,7 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
 
             # main mse loss
             if config.num_groups == 1:
-                batch_loss = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges)
+                batch_loss = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
                 epoch_loss += batch_loss.detach().item()
 
             # Leaf Entropy - encourage dim exploration early, decay to 0
@@ -159,7 +162,7 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             accumulated_loss = 0.0
             total_pred_error = 0.0
             for batch_x, batch_dy_val in bfgs_batches:
-                pred_error = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges)
+                pred_error = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
                 entropy_error = config.leaf_entropy_weight * (leaf_entropy(forcing_tree) + leaf_entropy(inter_dynam_tree))
                 entropy_error += config.mag_entropy_weight * (mag_reverse_l2_regularization(forcing_tree) + mag_reverse_l2_regularization(inter_dynam_tree))
                 accumulated_loss = accumulated_loss + pred_error + entropy_error
