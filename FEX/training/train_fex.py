@@ -78,12 +78,12 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
         num_batches = 0
         for batch_x, batch_dy_val in dataloader:
             batch_dy_val = batch_dy_val[:, :, 0:1]  # only learn first dim of dx/dt
-            if device == 'cuda':
-                batch_x = batch_x.to(device, non_blocking=True)
-                batch_dy_val = batch_dy_val.to(device, non_blocking=True)
-            else:
+            if device == 'cpu':
                 batch_x = batch_x.to(device)
                 batch_dy_val = batch_dy_val.to(device)
+            else:
+                batch_x = batch_x.to(device, non_blocking=True)
+                batch_dy_val = batch_dy_val.to(device, non_blocking=True)
             # group_indices = torch.arange(batch_x.size(1), device=batch_x.device)  # use all nodes
 
             adam_optim_self.zero_grad()
@@ -121,19 +121,18 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
 
         if mean_epoch_loss < best_epoch_loss:
             best_epoch_loss = mean_epoch_loss
-            best_forcing_tree = forcing_tree.copy_inorder()
-            best_inter_tree = inter_dynam_tree.copy_inorder()
+            if config.bfgs_epochs > 0:
+                best_forcing_tree = forcing_tree.copy_inorder()
+                best_inter_tree = inter_dynam_tree.copy_inorder()
 
         if train_logger:
             train_logger.debug(f"Epoch {epoch+1}/{config.num_epochs}, Tau: {current_tau:.4f}")
             train_logger.info(f"Adam Epoch {epoch+1}/{config.num_epochs}, Loss: {mean_epoch_loss:.4f}")
             train_logger.debug(f"Current equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}")
     
-
-    forcing_tree = best_forcing_tree.to(device)
-    inter_dynam_tree = best_inter_tree.to(device)
-
     if config.bfgs_epochs > 0:
+        forcing_tree = best_forcing_tree.to(device)
+        inter_dynam_tree = best_inter_tree.to(device)
         all_parameters = list(forcing_tree.all_parameters()) + list(inter_dynam_tree.all_parameters())
         bfgs_optim = torch.optim.LBFGS(
             all_parameters,
@@ -184,16 +183,9 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
 
         if bfgs_loss_val < best_epoch_loss:
             best_epoch_loss = bfgs_loss_val
-            best_forcing_tree = forcing_tree.copy_inorder()
-            best_inter_tree = inter_dynam_tree.copy_inorder()
-    # else:
-        # train_logger.info("Skipping BFGS phase as bfgs_epochs is set to 0")
-
-    forcing_tree = best_forcing_tree.to(device)
-    inter_dynam_tree = best_inter_tree.to(device)
-
-    # train_logger.debug(f"Final Forcing Tree Equation: {forcing_tree}")
-    # train_logger.debug(f"Final Inter Tree Equation: {inter_dynam_tree}")
+        else:
+            forcing_tree = best_forcing_tree.to(device)
+            inter_dynam_tree = best_inter_tree.to(device)
 
     return float(best_epoch_loss)
 
