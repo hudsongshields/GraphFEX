@@ -31,12 +31,17 @@ fex_config_global = None
 
 
 def eval_candidate(k_cand, gpu_id, op_indices):
+    logger = runtimeconfig.train_logger or train_logger
     if gpu_id is not None and torch.cuda.is_available():
         device = torch.device(f"cuda:{gpu_id}")
-        train_logger.info(f"Evaluating candidate {k_cand} on GPU {gpu_id}")
+        logger.info(f"Evaluating candidate {k_cand} on GPU {gpu_id}")
     else:
         device = torch.device("cpu")
-        train_logger.info(f"Evaluating candidate {k_cand} on CPU")
+        logger.info(f"Evaluating candidate {k_cand} on CPU")
+    if k_cand == 0:
+        verbose = True
+        logger.info(f"Evaluating candidate {k_cand} with op indices: {op_indices}")
+    else: verbose = False
 
     forcing_op_indices = op_indices[:len(self_ops_per_node)]
     inter_dynam_op_indices = op_indices[len(self_ops_per_node):len(self_ops_per_node) + len(inter_ops_per_node)]
@@ -51,6 +56,7 @@ def eval_candidate(k_cand, gpu_id, op_indices):
         adj_matrix_global,
         config=fex_config_global,
         device=device,
+        verbose=verbose,
     )
     score = score.detach().item() if isinstance(score, torch.Tensor) else float(score)
     if not math.isfinite(score):
@@ -68,11 +74,11 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     inter_fex = inter_fex.cpu()
     forcing_fex = forcing_fex.cpu()
     if k_cand == 0:
-        train_logger.info(f"Sampled candidate {k_cand} with score {score:.4f}\n self dynamics: {forcing_fex}\n inter dynamics: {inter_fex}")
+        logger.info(f"Sampled candidate {k_cand} with score {score:.4f}\n self dynamics: {forcing_fex}\n inter dynamics: {inter_fex}")
     return op_indices, reward, k_cand
 
 
-def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, adj_matrix, fex_config):
+def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, adj_matrix, fex_config, logger_path=None):
     global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs
     global dataloader_global, adj_matrix_global, fex_config_global
 
@@ -84,6 +90,9 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
     dataloader_global = dataloader
     adj_matrix_global = adj_matrix
     fex_config_global = fex_config
+
+    if logger_path:
+        runtimeconfig.CreateLogger(logger_path, name="train_logger", mode="a")
 
 
 def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig):
@@ -126,7 +135,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
         num_processes = int(slurm_cpus)
         train_logger.info(f"Detected SLURM environment with {num_processes} CPUs allocated for this task")
     else: num_processes = mp.cpu_count()
-    num_threads = min(mp.cpu_count(), config.num_cands_per_epoch) if num_processes is None else num_processes
+    num_threads = min(num_processes, config.num_cands_per_epoch)
     train_logger.info(f"Using {num_threads} parallel processes for candidate evaluation.")
 
     for epoch in range(config.num_epochs):
@@ -149,7 +158,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
 
         context = mp.get_context("spawn")
         gpu_ids = list(range(num_gpus)) if num_gpus > 0 else [None]
-        with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global)) as pool:
+        with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, runtimeconfig.train_log_path)) as pool:
             results = pool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
 
         for op_indices, reward, k_cand in results:

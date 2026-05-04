@@ -24,6 +24,7 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     forcing_tree_params = list(forcing_tree.all_parameters())
     inter_tree_params = list(inter_dynam_tree.all_parameters())
 
+
     adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr, betas=(0.95, 0.999), weight_decay=config.weight_decay)
     adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr, betas=(0.95, 0.999), weight_decay=config.weight_decay)
 
@@ -49,8 +50,8 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     best_epoch_loss = float('inf')
     best_forcing_tree = None
     best_inter_tree = None
-    if verbose:
-        train_logger = runtimeconfig.train_logger
+    train_logger = runtimeconfig.train_logger if verbose else None
+    if train_logger:
         train_logger.debug(f'Initial Equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}')
 
     inter_dynam_tree.train()
@@ -120,7 +121,7 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             best_forcing_tree = forcing_tree.copy_inorder()
             best_inter_tree = inter_dynam_tree.copy_inorder()
 
-        if verbose:
+        if train_logger:
             train_logger.debug(f"Epoch {epoch+1}/{config.num_epochs}, Tau: {current_tau:.4f}")
             train_logger.info(f"Adam Epoch {epoch+1}/{config.num_epochs}, Loss: {mean_epoch_loss:.4f}")
             train_logger.debug(f"Current equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}")

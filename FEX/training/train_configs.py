@@ -8,17 +8,24 @@ import logging
 class RunTimeConfig:
     device: str="cpu"
     train_logger: logging.Logger = None
+    train_log_path: str = None
 
     def __post_init__(self):
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
         print(f"Using device: {self.device}")
 
-    def CreateLogger(self, log_path: str, name: str="train_logger"):
+    def CreateLogger(self, log_path: str, name: str="train_logger", mode: str = "w"):
         logger = logging.getLogger(name)
         logger.setLevel(logging.DEBUG)
+        logger.propagate = False
 
-        fh = logging.FileHandler(log_path, mode="w")
+        if logger.handlers:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+
+        fh = logging.FileHandler(log_path, mode=mode)
         fh.setLevel(logging.DEBUG)
         ch = logging.StreamHandler()
         ch.setLevel(logging.INFO)
@@ -31,6 +38,7 @@ class RunTimeConfig:
         logger.addHandler(ch)
 
         self.train_logger = logger
+        self.train_log_path = str(log_path)
 
 
 

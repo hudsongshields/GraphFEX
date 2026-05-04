@@ -47,7 +47,7 @@ def load_hr_data():
     dt = 0.01
     len_run = 500
     per_run_timesteps = int(len_run / dt)
-    cut_timestep = int(per_run_timesteps * 0.1)
+    cut_timestep = int(per_run_timesteps * 1.0)
 
     num_runs = num_timesteps // per_run_timesteps
     x_chunks = torch.chunk(x_data, num_runs, dim=0)
@@ -102,14 +102,14 @@ def main():
         input_dim=20,
         hidden_dim=64,
         lr=0.001,
-        num_epochs=3,
+        num_epochs=1000,
         num_cands_per_epoch=9,
-        percentile_threshold=0.4,
+        percentile_threshold=0.5,
         num_trees=2,
     )
 
     fex_config = FEXConfig(
-        num_epochs=1000,
+        num_epochs=100,
         bfgs_epochs=0,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
