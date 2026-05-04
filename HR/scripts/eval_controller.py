@@ -28,7 +28,7 @@ def setup_run_dir() -> Path:
 
 def load_hr_data():
     adj_path = DATA_DIR / "BA_Nnodes100_Adj_deg_7_1.csv"
-    x_data_path = DATA_DIR / "HR_timeseries_BA_deg_7_1_SNR_45.csv"
+    x_data_path = DATA_DIR / "HR_timeseries_SNR_40.csv"
 
     if not adj_path.exists():
         raise FileNotFoundError(f"Could not find adjacency matrix at: {adj_path}")
@@ -47,7 +47,7 @@ def load_hr_data():
     dt = 0.01
     len_run = 500
     per_run_timesteps = int(len_run / dt)
-    cut_timestep = int(per_run_timesteps * 1.0)
+    cut_timestep = int(per_run_timesteps)
 
     num_runs = num_timesteps // per_run_timesteps
     x_chunks = torch.chunk(x_data, num_runs, dim=0)
@@ -56,7 +56,7 @@ def load_hr_data():
     all_dx_dt = []
 
     for x_run in x_chunks:
-        x_run = x_run[:cut_timestep]
+        x_run = x_run[::5]
         dx_dt = NumericalDeriv(x_run, dt=dt)
         x_run = x_run[2:-2]
 
@@ -69,6 +69,7 @@ def load_hr_data():
     x_data = torch.cat(all_x, dim=0)
     dx_dt = torch.cat(all_dx_dt, dim=0)
 
+    print(f"num runs: {num_runs}, timesteps per run: {per_run_timesteps}, total timesteps: {x_data.shape[0]}")
     adj_matrix_tensor = torch.tensor(adj_matrix.values, dtype=torch.float32)
 
     return x_data, dx_dt, adj_matrix_tensor
@@ -102,14 +103,14 @@ def main():
         input_dim=20,
         hidden_dim=64,
         lr=0.001,
-        num_epochs=1000,
+        num_epochs=800,
         num_cands_per_epoch=9,
         percentile_threshold=0.5,
         num_trees=2,
     )
 
     fex_config = FEXConfig(
-        num_epochs=100,
+        num_epochs=50,
         bfgs_epochs=0,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
@@ -117,8 +118,8 @@ def main():
         weight_decay=0.0,
         mag_entropy_weight=1e-4,
         pct_cosine_restart=0.5,
-        tau_start=5.0,
-        tau_end=0.1,
+        tau_start=8.0,
+        tau_end=4.0,
     )
 
     best_candidates = train_network_controller(
