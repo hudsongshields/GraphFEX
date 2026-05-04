@@ -122,6 +122,7 @@ def main():
         tau_end=4.0,
     )
 
+    save_dir = run_dir / "pre_finetune"
     best_candidates = train_network_controller(
         forcing_tree_config,
         inter_tree_config,
@@ -129,9 +130,8 @@ def main():
         adj_matrix_tensor,
         controller_config,
         fex_config,
+        checkpoint_dir=str(save_dir / "best_candidates.pt"),
     )
-
-    save_dir = run_dir / "pre_finetune"
     best_candidates.save_candidates(str(save_dir / "best_candidates.pt"))
     best_candidates.visualize_candidates(
         str(save_dir / "candidate_viz"),

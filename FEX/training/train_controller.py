@@ -95,7 +95,7 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
         runtimeconfig.CreateLogger(logger_path, name="train_logger", mode="a")
 
 
-def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig):
+def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, checkpoint_dir: str = None):
     train_logger = runtimeconfig.train_logger
     num_gpus = torch.cuda.device_count()
     
@@ -180,6 +180,8 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
 
             for candidate in top_epoch_cands:
                 best_candidates.add_new(candidate)
+            if checkpoint_dir is not None:
+                best_candidates.save_candidates(str(checkpoint_dir))
             train_logger.info(f"Controller Epoch {epoch}, Loss: {loss.item()}")
             train_logger.debug(f"Epoch {epoch}, Reward Threshold for Backprop: {thresh_reward:.4f}")
             train_logger.debug(f"Epoch {epoch}, Rewards: {rewards.detach().cpu().numpy()}")
