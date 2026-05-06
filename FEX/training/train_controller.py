@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from ..utils.tree_configs import TreeConfig
 
 from ..models.controllers import Controller
@@ -95,7 +97,7 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
         runtimeconfig.CreateLogger(logger_path, name="train_logger", mode="a")
 
 
-def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, checkpoint_dir: str = None):
+def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, checkpoint_dir: Path = None):
     train_logger = runtimeconfig.train_logger
     num_gpus = torch.cuda.device_count()
     
@@ -181,11 +183,12 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
             for candidate in top_epoch_cands:
                 best_candidates.add_new(candidate)
             if checkpoint_dir is not None:
-                best_candidates.save_candidates(str(checkpoint_dir))
+                best_candidates.save_candidates(str(checkpoint_dir / "best_candidates"))
+                best_candidates.visualize_candidates(str(checkpoint_dir / "visualizations"))
             train_logger.info(f"Controller Epoch {epoch}, Loss: {loss.item()}")
             train_logger.debug(f"Epoch {epoch}, Reward Threshold for Backprop: {thresh_reward:.4f}")
             train_logger.debug(f"Epoch {epoch}, Rewards: {rewards.detach().cpu().numpy()}")
-            train_logger.debug(f"Epoch {epoch}, Log Probs: {[lp.detach().cpu().numpy() for lp in log_probs_sorted]}")
+            train_logger.info(f"Epoch {epoch}, Log Probs: {[lp.detach().cpu().numpy() for lp in log_probs_sorted]}")
             train_logger.debug(f"Epoch {epoch}, Advantage: {advantage.detach().cpu().numpy()}")
 
     return best_candidates

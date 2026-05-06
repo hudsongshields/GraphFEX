@@ -47,7 +47,7 @@ def load_hr_data():
     dt = 0.01
     len_run = 500
     per_run_timesteps = int(len_run / dt)
-    cut_timestep = int(per_run_timesteps)
+    resolution_factor = 5
 
     num_runs = num_timesteps // per_run_timesteps
     x_chunks = torch.chunk(x_data, num_runs, dim=0)
@@ -56,8 +56,9 @@ def load_hr_data():
     all_dx_dt = []
 
     for x_run in x_chunks:
-        x_run = x_run[::5]
-        dx_dt = NumericalDeriv(x_run, dt=dt)
+        x_run = x_run[::resolution_factor]
+        new_dt = dt * resolution_factor
+        dx_dt = NumericalDeriv(x_run, dt=new_dt)
         x_run = x_run[2:-2]
 
         all_x.append(x_run)
@@ -117,7 +118,7 @@ def main():
         num_leaves=forcing_tree_config.num_leaves,
         weight_decay=0.0,
         mag_entropy_weight=1e-4,
-        pct_cosine_restart=0.5,
+        pct_cosine_restart=1.0,
         tau_start=8.0,
         tau_end=4.0,
     )
@@ -130,7 +131,7 @@ def main():
         adj_matrix_tensor,
         controller_config,
         fex_config,
-        checkpoint_dir=str(save_dir / "best_candidates.pt"),
+        checkpoint_dir=save_dir,
     )
     best_candidates.save_candidates(str(save_dir / "best_candidates.pt"))
     best_candidates.visualize_candidates(
