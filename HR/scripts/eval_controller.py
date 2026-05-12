@@ -1,3 +1,4 @@
+import argparse
 import os
 import multiprocessing as mp
 from pathlib import Path
@@ -16,7 +17,6 @@ from FEX.utils.tree_configs import get_tree_config
 SCRIPT_DIR = Path(__file__).resolve().parent
 HR_DIR = SCRIPT_DIR.parent
 DATA_DIR = HR_DIR / "data"
-
 
 def setup_run_dir() -> Path:
     job_id = os.environ.get("SLURM_JOB_ID", "local")
@@ -47,7 +47,7 @@ def load_hr_data():
     dt = 0.01
     len_run = 500
     per_run_timesteps = int(len_run / dt)
-    resolution_factor = 5
+    resolution_factor = 2
 
     num_runs = num_timesteps // per_run_timesteps
     x_chunks = torch.chunk(x_data, num_runs, dim=0)
@@ -89,10 +89,15 @@ def make_dataloader(x_data, dx_dt):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--num_workers", type=int, default=None)
+    args = parser.parse_args()
+
     run_dir = setup_run_dir()
 
     log_path = run_dir / "controller_eval.log"
     runtimeconfig.CreateLogger(str(log_path), name="train_logger")
+    runtimeconfig.train_logger = None
 
     forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
     inter_tree_config = get_tree_config("depth_2_tree_config")
@@ -103,9 +108,9 @@ def main():
     controller_config = ControllerConfig(
         input_dim=20,
         hidden_dim=64,
-        lr=0.001,
+        lr=0.002,
         num_epochs=800,
-        num_cands_per_epoch=12,
+        num_cands_per_epoch=9,
         percentile_threshold=0.5,
         num_trees=2,
     )
@@ -113,14 +118,14 @@ def main():
     fex_config = FEXConfig(
         num_epochs=60,
         bfgs_epochs=0,
+        lr=0.15,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
         num_leaves=forcing_tree_config.num_leaves,
-        weight_decay=0.0,
-        mag_entropy_weight=1e-4,
+        mag_entropy_weight=0,
         pct_cosine_restart=1.0,
-        tau_start=8.0,
-        tau_end=4.0,
+        tau_start=4.0,
+        tau_end=0.015,
     )
 
     save_dir = run_dir / "pre_finetune"
@@ -132,6 +137,7 @@ def main():
         controller_config,
         fex_config,
         checkpoint_dir=save_dir,
+        num_workers=args.num_workers,
     )
     best_candidates.save_candidates(str(save_dir / "best_candidates.pt"))
     best_candidates.visualize_candidates(

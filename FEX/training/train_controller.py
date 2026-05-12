@@ -33,7 +33,7 @@ fex_config_global = None
 
 
 def eval_candidate(k_cand, gpu_id, op_indices):
-    logger = runtimeconfig.train_logger or train_logger
+    logger = train_logger
     if gpu_id is not None and torch.cuda.is_available():
         device = torch.device(f"cuda:{gpu_id}")
         logger.info(f"Evaluating candidate {k_cand} on GPU {gpu_id}")
@@ -97,7 +97,7 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
         runtimeconfig.CreateLogger(logger_path, name="train_logger", mode="a")
 
 
-def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, checkpoint_dir: Path = None):
+def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, checkpoint_dir: Path = None, num_workers: int = None) -> GraphPool:
     train_logger = runtimeconfig.train_logger
     num_gpus = torch.cuda.device_count()
     
@@ -130,13 +130,16 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
         "tree_structure": inter_fex_struct,
     }
     inter_fex_kwargs["num_leaves"] = inter_fex_struct.num_leaves
-    best_candidates = GraphPool(pool_size=10)
+    best_candidates = GraphPool(pool_size=config.poolsize)
 
     slurm_cpus = os.getenv("SLURM_CPUS_PER_TASK")
     if slurm_cpus is not None:
         num_processes = int(slurm_cpus)
         train_logger.info(f"Detected SLURM environment with {num_processes} CPUs allocated for this task")
-    else: num_processes = mp.cpu_count()
+    else:
+        num_processes = mp.cpu_count()
+    if num_workers:
+        num_processes = min(num_workers, num_processes)
     num_threads = min(num_processes, config.num_cands_per_epoch)
     train_logger.info(f"Using {num_threads} parallel processes for candidate evaluation.")
 
@@ -152,7 +155,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
             pmfs = controller(controller_input)
             op_indices_list = []
             for k_cand in range(num_cands):
-                op_indices = epsilon_greedy_sample(pmfs, epsilon=0.1).squeeze(0)
+                op_indices = epsilon_greedy_sample(pmfs, epsilon=config.epsilon_greedy).squeeze(0)
                 chosen_probs = torch.stack([pmfs[i].squeeze(0)[op_indices[i]] for i in range(len(op_indices))])
                 log_prob = torch.log(chosen_probs).sum()
                 log_probs.append(log_prob)

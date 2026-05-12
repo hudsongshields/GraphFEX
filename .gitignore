@@ -17,3 +17,4 @@ hpglogs/
 HR/logs/
 __pycache__/
 *.pyc
+/shell_scripts/

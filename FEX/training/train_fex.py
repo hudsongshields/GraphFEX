@@ -25,19 +25,21 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
     inter_tree_params = list(inter_dynam_tree.all_parameters())
 
 
-    adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr, betas=(0.95, 0.999), weight_decay=config.weight_decay)
-    adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr, betas=(0.95, 0.999), weight_decay=config.weight_decay)
+    adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr, betas=(0.95, 0.999))
+    adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr, betas=(0.95, 0.999))
 
-    scheduler_self = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        adam_optim_self,
-        T_0=max(int(config.num_epochs * config.pct_cosine_restart), 1),
-        eta_min=config.lr * 0.15
-    )
-    scheduler_inter = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        adam_optim_inter,
-        T_0=max(int(config.num_epochs * config.pct_cosine_restart), 1),
-        eta_min=config.inter_lr * 0.15
-    )
+    lr_decay = config.lr_decay
+    if lr_decay > 0:
+        scheduler_self = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            adam_optim_self,
+            T_0=max(int(config.num_epochs * config.pct_cosine_restart), 1),
+            eta_min=config.lr * lr_decay
+        )
+        scheduler_inter = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            adam_optim_inter,
+            T_0=max(int(config.num_epochs * config.pct_cosine_restart), 1),
+            eta_min=config.inter_lr * lr_decay
+        )
 
 
     # Precompute edge indices - used by both group_loss
@@ -84,7 +86,6 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             else:
                 batch_x = batch_x.to(device, non_blocking=True)
                 batch_dy_val = batch_dy_val.to(device, non_blocking=True)
-            # group_indices = torch.arange(batch_x.size(1), device=batch_x.device)  # use all nodes
 
             adam_optim_self.zero_grad()
             adam_optim_inter.zero_grad()
@@ -114,8 +115,9 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
 
             num_batches += 1
         
-        scheduler_self.step()
-        scheduler_inter.step()
+        if lr_decay > 0:
+            scheduler_self.step()
+            scheduler_inter.step()
 
         mean_epoch_loss = epoch_loss / max(1, num_batches)
 
@@ -128,7 +130,6 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
         if train_logger:
             train_logger.debug(f"Epoch {epoch+1}/{config.num_epochs}, Tau: {current_tau:.4f}")
             train_logger.info(f"Adam Epoch {epoch+1}/{config.num_epochs}, Loss: {mean_epoch_loss:.4f}")
-            train_logger.debug(f"Current equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}")
     
     if config.bfgs_epochs > 0:
         forcing_tree = best_forcing_tree.to(device)
@@ -181,6 +182,7 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
                 return best_epoch_loss
             return float('inf')
 
+        print(f"BFGS Loss: {bfgs_loss_val:.4f}, Best Epoch Loss: {best_epoch_loss:.4f}")
         if bfgs_loss_val < best_epoch_loss:
             best_epoch_loss = bfgs_loss_val
         else:
@@ -206,7 +208,7 @@ if __name__ == "__main__":
     adj_matrix = pd.read_csv('HR/data/BA_Nnodes100_Adj_deg_7_1.csv', header=None)
     num_graph_nodes = adj_matrix.shape[0]
 
-    x_df = pd.read_csv('HR/data/HR_timeseries_BA_deg_7_1_SNR_45.csv', header=None)
+    x_df = pd.read_csv('HR/data/HR_timeseries_SNR_40.csv', header=None)
     num_timesteps, num_cols = x_df.shape
     x_np = x_df.to_numpy(dtype=np.float32)
     x_data = torch.from_numpy(x_np.reshape(num_timesteps, num_graph_nodes, 3))
@@ -214,15 +216,16 @@ if __name__ == "__main__":
     dt = 0.01
     len_run = 500
     per_run_timesteps = int(len_run / dt)
-    cut_timestep = per_run_timesteps * 0.8
-    
+    resolution_factor = 3
+    dt = dt * resolution_factor
+
     num_runs = num_timesteps // per_run_timesteps
     x_chunks = torch.chunk(x_data, num_runs, dim=0)
     all_dx_dt = []
     all_x = []
 
     for x_run in x_chunks:
-        x_run = x_run[:int(cut_timestep)]
+        x_run = x_run[::resolution_factor]
         dx_dt = NumericalDeriv(x_run, dt=dt) # 4th order
         x_run = x_run[2:-2]
         all_dx_dt.append(dx_dt)
@@ -240,7 +243,7 @@ if __name__ == "__main__":
     adj_matrix_tensor = torch.tensor(adj_matrix.values, dtype=torch.float32).to(runtimeconfig.device)
     x_data_tensor_ds = TensorDataset(train_x_data, train_dx_dt)
     if runtimeconfig.device == "cuda":
-        dataloader = DataLoader(x_data_tensor_ds, batch_size=512, shuffle=True, pin_memory=True)
+        dataloader = DataLoader(x_data_tensor_ds, batch_size=64, shuffle=True, pin_memory=True)
     else:
         dataloader = DataLoader(x_data_tensor_ds, batch_size=512, shuffle=True)
 
@@ -251,22 +254,21 @@ if __name__ == "__main__":
     inter_tree_config = get_tree_config("depth_2_tree_config")
 
     fex_config = FEXConfig(
-        num_epochs = 2000,
-        bfgs_epochs = 0,
-        lr = 0.02,
-        inter_lr = 0.008,
-        bfgs_lr = 0.1,
-        num_groups = 1,
-        leaf_dim = x_data.shape[2],
-        num_leaves = forcing_tree_config.num_leaves,
-        set_hard_at = 0.8
+        num_epochs=120,
+        bfgs_epochs=0,
+        lr=0.02,
+        lr_decay=0.0,
+        bfgs_lr=0.1,
+        leaf_dim=x_data.shape[2],
+        num_leaves=forcing_tree_config.num_leaves,
+        mag_entropy_weight=0,
+        pct_cosine_restart=1.0,
+        tau_start=3.0,
+        tau_end=0.01,
     )
-    fex_config.tau_anneal_epochs = fex_config.num_epochs
-    fex_config.tau_start = 8.0
-    fex_config.pct_cosine_restart = 0.5
-    fex_config.leaf_entropy_weight = 0.1
+    fex_config.tau_anneal_epochs = fex_config.num_epochs * 1.0
+    fex_config.leaf_entropy_weight = 0.0
 
-    fex_config.mag_entropy_weight = 0.000
 
     forcing_op_indices = torch.tensor([0, 0, 0, 0, 2, 1, 0], dtype=torch.long).to(runtimeconfig.device)
     forcing_fex = FEX(
@@ -319,7 +321,7 @@ if __name__ == "__main__":
     loss_history = []
     coeff_history = []
     try:
-        loss = train_network_fex(forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config, use_entropy=False)
+        loss = train_network_fex(forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config, use_entropy=False, verbose=True)
     except KeyboardInterrupt:
         print("\nTraining interrupted, saving current state")
         loss = float('inf')

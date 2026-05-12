@@ -52,6 +52,9 @@ class ControllerConfig():
 
     num_cands_per_epoch: int = 10
     percentile_threshold: float = 0.5
+    poolsize: int = 10
+
+    epsilon_greedy: float = 0.1
 
 @dataclass
 class FEXConfig():
@@ -65,7 +68,7 @@ class FEXConfig():
     lr: float = 0.02
     inter_lr: float = 0.008
     num_epochs: int = 30
-    weight_decay: float = 0.0
+    lr_decay: float = 0.0
 
     bfgs_epochs: int = 15
     bfgs_lr: float = 0.8
