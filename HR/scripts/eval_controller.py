@@ -20,7 +20,7 @@ DATA_DIR = HR_DIR / "data"
 
 def setup_run_dir() -> Path:
     job_id = os.environ.get("SLURM_JOB_ID", "local")
-    run_dir = HR_DIR / "logs" / f"run_{job_id}"
+    run_dir = HR_DIR / "sigmoid_eval" / f"run_{job_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "pre_finetune").mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -47,7 +47,7 @@ def load_hr_data():
     dt = 0.01
     len_run = 500
     per_run_timesteps = int(len_run / dt)
-    resolution_factor = 2
+    resolution_factor = 4
 
     num_runs = num_timesteps // per_run_timesteps
     x_chunks = torch.chunk(x_data, num_runs, dim=0)
@@ -82,7 +82,7 @@ def make_dataloader(x_data, dx_dt):
     pin_memory = torch.cuda.is_available()
     return DataLoader(
         dataset,
-        batch_size=512,
+        batch_size=128,
         shuffle=True,
         pin_memory=pin_memory,
     )
@@ -97,7 +97,6 @@ def main():
 
     log_path = run_dir / "controller_eval.log"
     runtimeconfig.CreateLogger(str(log_path), name="train_logger")
-    runtimeconfig.train_logger = None
 
     forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
     inter_tree_config = get_tree_config("depth_2_tree_config")
@@ -108,17 +107,18 @@ def main():
     controller_config = ControllerConfig(
         input_dim=20,
         hidden_dim=64,
-        lr=0.002,
-        num_epochs=800,
-        num_cands_per_epoch=9,
-        percentile_threshold=0.5,
+        lr=0.02,
+        num_epochs=200,
+        num_cands_per_epoch=10,
+        percentile_threshold=0.4,
         num_trees=2,
     )
 
     fex_config = FEXConfig(
-        num_epochs=60,
+        num_epochs=120,
         bfgs_epochs=0,
         lr=0.15,
+        inter_lr=0.05,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
         num_leaves=forcing_tree_config.num_leaves,

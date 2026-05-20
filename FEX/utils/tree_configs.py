@@ -148,24 +148,28 @@ def ops_per_depth_4():
 @dataclass 
 class TreeConfig:
     tree_func: Callable
-    ops_per_node: List
+    ops_per_node_func: Callable
     num_leaves:int
+
+    @property
+    def ops_per_node(self):
+        return self.ops_per_node_func()
 
     def build_tree(self, sample_indices):
         return self.tree_func(sample_indices)
 
 
-depth_2_tree_config = TreeConfig(tree_func=depth_2_tree, ops_per_node=ops_per_depth_2_tree(), num_leaves=2)
-depth_3_tree_config = TreeConfig(tree_func=depth_3, ops_per_node=ops_per_depth_3(), num_leaves=2)
-depth_4_tree_config = TreeConfig(tree_func=depth_4, ops_per_node=ops_per_depth_4(), num_leaves=4)
-depth_3_leaves_4_config = TreeConfig(tree_func=depth_3_leaves_4, ops_per_node=ops_per_depth_3_leaves_4(), num_leaves=4)
+depth_2_tree_config = TreeConfig(tree_func=depth_2_tree, ops_per_node_func=ops_per_depth_2_tree, num_leaves=2)
+depth_3_tree_config = TreeConfig(tree_func=depth_3, ops_per_node_func=ops_per_depth_3, num_leaves=2)
+depth_4_tree_config = TreeConfig(tree_func=depth_4, ops_per_node_func=ops_per_depth_4, num_leaves=4)
+depth_3_leaves_4_config = TreeConfig(tree_func=depth_3_leaves_4, ops_per_node_func=ops_per_depth_3_leaves_4, num_leaves=4)
 
 TREE_CONFIGS = {
     "depth_2_tree_config": depth_2_tree_config,
     "depth_3_tree_config": depth_3_tree_config,
     "depth_4_tree_config": depth_4_tree_config,
     "depth_3_leaves_4_config": depth_3_leaves_4_config,
-    "depth_3_partial_config": TreeConfig(tree_func=depth_3_partial, ops_per_node=ops_per_depth_3_partial(), num_leaves=3),
+    "depth_3_partial_config": TreeConfig(tree_func=depth_3_partial, ops_per_node_func=ops_per_depth_3_partial, num_leaves=3),
 }
 
 

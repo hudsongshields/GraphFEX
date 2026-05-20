@@ -17,6 +17,7 @@ from multiprocessing.managers import BaseManager
 import torch.optim.lr_scheduler as lr_scheduler
 import os
 import math
+import time
 
 import logging
 train_logger = logging.getLogger("train_logger") 
@@ -64,7 +65,7 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     if not math.isfinite(score):
         reward = 0.0
     else:
-        reward = 1.0 / math.sqrt(1.0 + score)
+        reward = 1.0 / (1.0 + score)
 
     for param in forcing_fex.parameters():
         param.requires_grad = False
@@ -161,19 +162,20 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
                 log_probs.append(log_prob)
                 op_indices_list.append(op_indices.detach().clone().cpu())
             top_epoch_cands = GraphPool(pool_size=thresh_idx)
-
+            t1 = time.time()
             results = pool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
-
+            t2 = time.time()
+            train_logger.info(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
             for op_indices, reward, k_cand in results:
                 inter_tree = FEX(sample_indices=op_indices[len(self_ops_per_node):len(self_ops_per_node) + len(inter_ops_per_node)], **inter_fex_kwargs)
                 forcing_tree = FEX(sample_indices=op_indices[:len(self_ops_per_node)], **fex_kwargs)
-                candidate = GraphPoolCandidate(inter_tree=inter_tree, forcing_tree=forcing_tree, reward=reward, id=k_cand)
+                candidate = GraphPoolCandidate(inter_tree=inter_tree, forcing_tree=forcing_tree, reward=reward, id=int(k_cand + epoch * config.num_cands_per_epoch))
                 top_epoch_cands.add_new(candidate)
 
             train_logger.debug(f"Epoch {epoch} pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
 
             rewards = torch.tensor([cand.reward for cand in top_epoch_cands]).to(runtimeconfig.device)
-            log_probs_sorted = [log_probs[cand.id] for cand in top_epoch_cands]
+            log_probs_sorted = [log_probs[cand.id - epoch * config.num_cands_per_epoch] for cand in top_epoch_cands]
 
             thresh_reward = torch.tensor(top_epoch_cands.threshold).to(runtimeconfig.device)
             advantage = rewards - thresh_reward

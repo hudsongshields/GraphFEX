@@ -18,3 +18,4 @@ HR/logs/
 __pycache__/
 *.pyc
 /shell_scripts/
+HR/fex_eval_1
