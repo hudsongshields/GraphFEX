@@ -1,5 +1,6 @@
 import argparse
 import math
+import logging
 import os
 import multiprocessing as mp
 from pathlib import Path
@@ -24,12 +25,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 HR_DIR = SCRIPT_DIR.parent
 DATA_DIR = HR_DIR / "data"
 
-def setup_run_dir(job_id=None) -> Path:
+def setup_run_dir(num_epochs, batchsize, job_id=None, mode="default") -> Path:
     if job_id:
         job_id = str(job_id)
     else:
-        job_id = os.environ.get("SLURM_JOB_ID", "local")
-    run_dir = HR_DIR / "logs" / f"run_{job_id}"
+        job_id = ""
+    run_id = f"e_{num_epochs}_b_{batchsize}_{job_id}"
+    run_dir = HR_DIR / f"{mode}" / f"run_{run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "pre_finetune").mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -56,7 +58,7 @@ def load_hr_data():
     dt = 0.01
     len_run = 500
     per_run_timesteps = int(len_run / dt)
-    resolution_factor = 4
+    resolution_factor = 1
 
     num_runs = num_timesteps // per_run_timesteps
     x_chunks = torch.chunk(x_data, num_runs, dim=0)
@@ -97,51 +99,6 @@ def make_dataloader(x_data, dx_dt, batch_size=256):
     )
 
 
-def validate_ground_truth_operators(forcing_op_indices, inter_op_indices):
-    """
-    Validate that operator indices are correct for ground truth specification.
-    Ground truth:
-    - Forcing: all binary=add, unary={identity, square, cube, identity}
-    - Inter: binary=mul, unary={identity, sigmoid}
-    """
-    errors = []
-    
-    # Check forcing tree indices
-    for i, idx in enumerate(forcing_op_indices[:3]):
-        if idx >= len(BINARY_OPS):
-            errors.append(f"Forcing binary op index {i}: {idx} out of range [0, {len(BINARY_OPS)-1}]")
-        elif BINARY_OPS[idx].__name__ != "add":
-            errors.append(f"Forcing binary op {i}: expected 'add', got '{BINARY_OPS[idx].__name__}'")
-    
-    for i, idx in enumerate(forcing_op_indices[3:], start=3):
-        if idx >= len(UNARY_OPS):
-            errors.append(f"Forcing unary op index {i}: {idx} out of range [0, {len(UNARY_OPS)-1}]")
-        elif UNARY_OPS[idx].__name__ not in ["identity", "square", "cube"]:
-            errors.append(f"Forcing unary op {i}: expected one of {{identity, square, cube}}, got '{UNARY_OPS[idx].__name__}'")
-    
-    # Check inter tree indices
-    if inter_op_indices[0] >= len(BINARY_OPS):
-        errors.append(f"Inter binary op: {inter_op_indices[0]} out of range [0, {len(BINARY_OPS)-1}]")
-    elif BINARY_OPS[inter_op_indices[0]].__name__ != "mul":
-        errors.append(f"Inter binary op: expected 'mul', got '{BINARY_OPS[inter_op_indices[0]].__name__}'")
-    
-    if inter_op_indices[1] >= len(UNARY_OPS):
-        errors.append(f"Inter unary op 1: {inter_op_indices[1]} out of range [0, {len(UNARY_OPS)-1}]")
-    elif UNARY_OPS[inter_op_indices[1]].__name__ != "identity":
-        errors.append(f"Inter unary op 1: expected 'identity', got '{UNARY_OPS[inter_op_indices[1]].__name__}'")
-    
-    if inter_op_indices[2] >= len(UNARY_OPS):
-        errors.append(f"Inter unary op 2: {inter_op_indices[2]} out of range [0, {len(UNARY_OPS)-1}]")
-    elif UNARY_OPS[inter_op_indices[2]].__name__ != "sigmoid":
-        errors.append(f"Inter unary op 2: expected 'sigmoid', got '{UNARY_OPS[inter_op_indices[2]].__name__}'")
-    
-    if errors:
-        error_msg = "Ground truth operator validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
-        raise ValueError(error_msg)
-    
-    print("Ground truth operators validated successfully")
-    print(f"  Forcing: binary={BINARY_OPS[forcing_op_indices[0]].__name__}, unary=[{', '.join(UNARY_OPS[i].__name__ for i in forcing_op_indices[3:])}]")
-    print(f"  Inter: binary={BINARY_OPS[inter_op_indices[0]].__name__}, unary=[{UNARY_OPS[inter_op_indices[1]].__name__}, {UNARY_OPS[inter_op_indices[2]].__name__}]")
 
 
 def independent_t_test_greater(sample_a: np.ndarray, sample_b: np.ndarray) -> tuple[float, float]:
@@ -154,21 +111,189 @@ def independent_t_test_greater(sample_a: np.ndarray, sample_b: np.ndarray) -> tu
     return t_stat, one_sided_p
 
 
+def _log_fex_trees(
+    forcing_op_indices: list,
+    inter_op_indices: list,
+    fex_config: "FEXConfig",
+    save_dir: Path,
+    label: str,
+    logger,
+):
+    """Log the text expression of both trees and save graphviz PNGs to save_dir/visualizations/."""
+    from FEX.training.tree_helpers import visualize_tree
+    forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
+    inter_tree_config = get_tree_config("depth_2_tree_config")
+    device = runtimeconfig.device
+
+    f_idx = torch.tensor(forcing_op_indices, dtype=torch.long).to(device)
+    i_idx = torch.tensor(inter_op_indices, dtype=torch.long).to(device)
+
+    forcing_fex = FEX(
+        sample_indices=f_idx,
+        leaf_dim=fex_config.leaf_dim,
+        num_leaves=forcing_tree_config.num_leaves,
+        tree_structure=forcing_tree_config,
+        init_tau=fex_config.tau_start,
+    ).to(device)
+    inter_fex = FEX(
+        sample_indices=i_idx,
+        leaf_dim=fex_config.leaf_dim * 2,
+        num_leaves=inter_tree_config.num_leaves,
+        tree_structure=inter_tree_config,
+        init_tau=fex_config.tau_start,
+    ).to(device)
+    _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
+
+    logger.info(f"[{label}] forcing tree: {str(forcing_fex)}")
+    logger.info(f"[{label}] inter tree:   {str(inter_fex)}")
+
+    viz_dir = save_dir / "visualizations"
+    viz_dir.mkdir(exist_ok=True)
+    safe_label = label.replace(" ", "_").lower()
+    try:
+        visualize_tree(forcing_fex, filename=str(viz_dir / f"{safe_label}_forcing_tree"))
+        visualize_tree(inter_fex, filename=str(viz_dir / f"{safe_label}_inter_tree"))
+    except Exception as e:
+        logger.warning(f"[{label}] graphviz render failed: {e}")
+
+
+def _apply_inter_leaf_masks(inter_fex: FEX, node_dim: int) -> None:
+    """Match train_fex masking: leaf0 uses self dims, leaf1 uses neighbor dims."""
+    if len(inter_fex.leaf_mlps) < 2:
+        return
+    with torch.no_grad():
+        inter_fex.leaf_mlps[0].logit_mask[node_dim:].fill_(-1e9)
+        inter_fex.leaf_mlps[1].logit_mask[:node_dim].fill_(-1e9)
+
+
+def _save_top_candidate_visualizations(
+    top_records: list[dict],
+    save_dir: Path,
+    label: str,
+    logger,
+) -> None:
+    """Save per-sample top candidate trees and a short summary table."""
+    from FEX.training.tree_helpers import visualize_tree
+
+    logger = logger or logging.getLogger(__name__)
+
+    if not top_records:
+        logger.warning(f"[{label}] no sample candidates available for visualization")
+        return
+
+    safe_label = label.replace(" ", "_").lower()
+    top_dir = save_dir / "top_candidates" / safe_label
+    top_dir.mkdir(parents=True, exist_ok=True)
+
+    lines = ["rank,sample_idx,reward"]
+    for rank, rec in enumerate(top_records, start=1):
+        reward = float(rec["reward"])
+        sample_idx = int(rec["sample_idx"])
+        lines.append(f"{rank},{sample_idx},{reward:.8f}")
+
+        prefix = f"rank_{rank:02d}_sample_{sample_idx:03d}_reward_{reward:.6f}"
+        try:
+            visualize_tree(rec["forcing_tree"], filename=str(top_dir / f"{prefix}_forcing_tree"))
+            visualize_tree(rec["inter_tree"], filename=str(top_dir / f"{prefix}_inter_tree"))
+        except Exception as e:
+            logger.warning(f"[{label}] failed to render top candidate rank {rank}: {e}")
+
+    (top_dir / "summary.csv").write_text("\n".join(lines) + "\n")
+    logger.info(f"[{label}] saved top candidate visualizations to {top_dir}")
+
+
+def _run_fex_samples(
+    result_queue: mp.Queue,
+    forcing_op_indices: list,
+    inter_op_indices: list,
+    num_samples: int,
+    fex_config: "FEXConfig",
+    x_data: torch.Tensor,
+    dx_dt: torch.Tensor,
+    adj_matrix_tensor: torch.Tensor,
+    batch_size: int,
+    save_dir: Path,
+    label: str,
+    top_k: int,
+):
+
+    forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
+    inter_tree_config = get_tree_config("depth_2_tree_config")
+
+    dataset = TensorDataset(x_data, dx_dt)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    device = runtimeconfig.device
+    f_indices = torch.tensor(forcing_op_indices, dtype=torch.long).to(device)
+    i_indices = torch.tensor(inter_op_indices, dtype=torch.long).to(device)
+
+    forcing_fex = FEX(
+        sample_indices=f_indices,
+        leaf_dim=fex_config.leaf_dim,
+        num_leaves=forcing_tree_config.num_leaves,
+        tree_structure=forcing_tree_config,
+        init_tau=fex_config.tau_start,
+    ).to(device)
+    inter_fex = FEX(
+        sample_indices=i_indices,
+        leaf_dim=fex_config.leaf_dim * 2,
+        num_leaves=inter_tree_config.num_leaves,
+        tree_structure=inter_tree_config,
+        init_tau=fex_config.tau_start,
+    ).to(device)
+    _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
+
+    rewards = []
+    top_records: list[dict] = []
+    for sample_idx in range(num_samples):
+        score = train_network_fex(
+            forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config, verbose=False,
+        )
+        reward = 1.0 / (1.0 + score)
+        rewards.append(reward)
+
+        rec = {
+            "reward": float(reward),
+            "sample_idx": int(sample_idx),
+            "forcing_tree": forcing_fex.copy_inorder().cpu(),
+            "inter_tree": inter_fex.copy_inorder().cpu(),
+        }
+        top_records.append(rec)
+        top_records.sort(key=lambda r: r["reward"], reverse=True)
+        if len(top_records) > max(1, top_k):
+            top_records.pop(-1)
+
+        forcing_fex.reset(fex_config)
+        inter_fex.reset(fex_config)
+        _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
+
+    _save_top_candidate_visualizations(top_records, save_dir=save_dir, label=label, logger=runtimeconfig.train_logger)
+
+    result_queue.put(rewards)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_workers", type=int, default=None)
-    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--job_id", type=str, default=None)
-    parser.add_argument("--num_samples", type=int, default=50)
+    parser.add_argument("--num_samples", type=int, default=30)
+    parser.add_argument("--top_k_viz", type=int, default=1)
     parser.add_argument("--num_epochs", type=int, default=60)
-    parser.add_argument("--mode", type=str, default="default", choices=["default", "sigmoid"])
+    parser.add_argument("--mode", type=str, default="default", choices=["default", "sigmoid", "inter_test"])
+    parser.add_argument("--lr_decay", type=float, default=0.0)
     args = parser.parse_args()
 
-    run_dir = setup_run_dir(job_id=args.job_id)
+    run_dir = setup_run_dir(args.num_epochs, args.batch_size, job_id=args.job_id, mode=args.mode)
 
     log_path = run_dir / "controller_eval.log"
     runtimeconfig.CreateLogger(str(log_path), name="train_logger")
+    train_logger = runtimeconfig.train_logger
+    train_logger.info(
+        f"Starting eval_fex: mode={args.mode}, job_id={args.job_id}, "
+        f"batch_size={args.batch_size}, num_epochs={args.num_epochs}, num_samples={args.num_samples}"
+    )
 
     forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
     inter_tree_config = get_tree_config("depth_2_tree_config")
@@ -191,29 +316,40 @@ def main():
     fex_config = FEXConfig(
         num_epochs=args.num_epochs,
         bfgs_epochs=0,
-        lr=0.15,
-        inter_lr=0.05,
+        lr=0.02,
+        inter_lr=0.02,
+        lr_decay=0.01,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
         num_leaves=forcing_tree_config.num_leaves,
-        mag_entropy_weight=0.0,
         pct_cosine_restart=1.0,
-        tau_start=4.0,
-        tau_end=0.015,
+        tau_start=8.0,
+        tau_end=0.1,
     )
+    fex_config.tau_anneal_epochs = fex_config.num_epochs * 1.0
+    fex_config.leaf_entropy_weight = -1e-8
+    fex_config.decay_entropy_until = 0.0
+    fex_config.mag_entropy_weight = 0.0
+    fex_config.set_hard_at_epoch = fex_config.num_epochs * 1.0
+    fex_config.tau_schedule = "exponential"
 
-    # Ground-truth indices (immutable baseline for comparison)
+
+
     ground_truth_forcing_op_indices = torch.tensor([0, 0, 0, 0, 1, 2, 0], dtype=torch.long).to(runtimeconfig.device)
     ground_truth_inter_op_indices = torch.tensor([1, 0, 3], dtype=torch.long).to(runtimeconfig.device)
-    validate_ground_truth_operators(
-        forcing_op_indices=ground_truth_forcing_op_indices,
-        inter_op_indices=ground_truth_inter_op_indices,
-    )
     
     save_dir = run_dir / "pre_finetune"
     random_init_rewards = []
-    t1 = time.time()
-    if args.mode=="default":
+    random_ground_truth_rewards = []
+
+    if args.mode == "default":
+        train_logger.info("Mode default: evaluating random controller-sampled candidates")
+        _log_fex_trees(
+            ground_truth_forcing_op_indices.tolist(),
+            ground_truth_inter_op_indices.tolist(),
+            fex_config, save_dir, "ground_truth", train_logger,
+        )
+        t1 = time.time()
         best_candidates = train_network_controller(
             forcing_tree_config,
             inter_tree_config,
@@ -225,65 +361,151 @@ def main():
             num_workers=args.num_workers,
         )
         random_init_rewards = [cand.reward for cand in best_candidates]
-    # end of default mode block
-    elif args.mode=="sigmoid": # eval random initializations for sequence {identity, sigmoid, sigmoid, sigmoid}
-        candidate_forcing_op_indices = torch.tensor([0, 0, 0, 0, 3, 3, 3], dtype=torch.long).to(runtimeconfig.device)
-        candidate_inter_op_indices = torch.tensor([1, 0, 3], dtype=torch.long).to(runtimeconfig.device)
+        t2 = time.time()
+        approx_time_per_cand = (t2 - t1) / args.num_samples
+        # Ground truth runs sequentially (controller already consumed workers)
+        train_logger.info("Evaluating ground-truth baseline (sequential)")
         forcing_fex = FEX(
-            sample_indices=candidate_forcing_op_indices,
+            sample_indices=ground_truth_forcing_op_indices,
             leaf_dim=fex_config.leaf_dim,
             num_leaves=forcing_tree_config.num_leaves,
             tree_structure=forcing_tree_config,
             init_tau=fex_config.tau_start,
         ).to(runtimeconfig.device)
-
         inter_fex = FEX(
-            sample_indices=candidate_inter_op_indices,
+            sample_indices=ground_truth_inter_op_indices,
             leaf_dim=fex_config.leaf_dim * 2,
             num_leaves=inter_tree_config.num_leaves,
             tree_structure=inter_tree_config,
             init_tau=fex_config.tau_start,
         ).to(runtimeconfig.device)
-        for _ in range(args.num_samples):
-            score = train_network_fex(forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config, use_entropy=False, verbose=False)
+        _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
+        t1 = time.time()
+        gt_top_records: list[dict] = []
+        for sample_idx in range(args.num_samples):
+            score = train_network_fex(
+                forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config,
+                use_entropy=False, verbose=(sample_idx == 0),
+            )
             reward = 1.0 / (1.0 + score)
-            random_init_rewards.append(reward)
+            random_ground_truth_rewards.append(reward)
+
+            rec = {
+                "reward": float(reward),
+                "sample_idx": int(sample_idx),
+                "forcing_tree": forcing_fex.copy_inorder().cpu(),
+                "inter_tree": inter_fex.copy_inorder().cpu(),
+            }
+            gt_top_records.append(rec)
+            gt_top_records.sort(key=lambda r: r["reward"], reverse=True)
+            if len(gt_top_records) > max(1, args.top_k_viz):
+                gt_top_records.pop(-1)
+
             forcing_fex.reset(fex_config)
             inter_fex.reset(fex_config)
+            _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
+        t2 = time.time()
+        approx_rate_single_core = (t2 - t1) / args.num_samples
+
+        _save_top_candidate_visualizations(
+            gt_top_records,
+            save_dir=save_dir,
+            label="ground_truth",
+            logger=train_logger,
+        )
+
+        controller_top_records = []
+        for rank, cand in enumerate(best_candidates, start=1):
+            if rank > max(1, args.top_k_viz):
+                break
+            controller_top_records.append(
+                {
+                    "reward": float(cand.reward),
+                    "sample_idx": int(cand.id),
+                    "forcing_tree": cand.forcing_tree,
+                    "inter_tree": cand.inter_tree,
+                }
+            )
+        _save_top_candidate_visualizations(
+            controller_top_records,
+            save_dir=save_dir,
+            label="test",
+            logger=train_logger,
+        )
+
+    else:
+        # sigmoid / inter_test 
+        if args.mode == "sigmoid":
+            train_logger.info("Mode sigmoid: baseline uses inter tree mul(identity, sigmoid)")
+            candidate_forcing_op_indices = [0, 0, 0, 0, 3, 3, 3]
+            candidate_inter_op_indices = [1, 0, 3]
+        else:  # inter_test
+            train_logger.info("Mode inter_test: baseline uses inter tree mul(sigmoid, sigmoid)")
+            candidate_forcing_op_indices = [0, 0, 0, 0, 1, 2, 0]
+            candidate_inter_op_indices = [1, 3, 3]
+
+        _log_fex_trees(
+            candidate_forcing_op_indices,
+            candidate_inter_op_indices,
+            fex_config, save_dir, args.mode, train_logger,
+        )
+        _log_fex_trees(
+            ground_truth_forcing_op_indices.tolist(),
+            ground_truth_inter_op_indices.tolist(),
+            fex_config, save_dir, "ground_truth", train_logger,
+        )
+        train_logger.info("Launching test and ground-truth FEX evaluations in parallel (2 cores)")
+        result_q_test = mp.Queue()
+        result_q_gt = mp.Queue()
+        p_test = mp.Process(
+            target=_run_fex_samples,
+            args=(
+                result_q_test,
+                candidate_forcing_op_indices,
+                candidate_inter_op_indices,
+                args.num_samples,
+                fex_config,
+                x_data,
+                dx_dt,
+                adj_matrix_tensor,
+                args.batch_size,
+                save_dir,
+                "test",
+                args.top_k_viz,
+            ),
+        )
+        p_gt = mp.Process(
+            target=_run_fex_samples,
+            args=(
+                result_q_gt,
+                ground_truth_forcing_op_indices.tolist(),
+                ground_truth_inter_op_indices.tolist(),
+                args.num_samples,
+                fex_config,
+                x_data,
+                dx_dt,
+                adj_matrix_tensor,
+                args.batch_size,
+                save_dir,
+                "ground_truth",
+                args.top_k_viz,
+            ),
+        )
+        t1 = time.time()
+        p_test.start()
+        p_gt.start()
+        p_test.join()
+        p_gt.join()
+        t2 = time.time()
+        if p_test.exitcode != 0:
+            raise RuntimeError(f"Test FEX worker exited with code {p_test.exitcode}")
+        if p_gt.exitcode != 0:
+            raise RuntimeError(f"Ground-truth FEX worker exited with code {p_gt.exitcode}")
+        random_init_rewards = result_q_test.get()
+        random_ground_truth_rewards = result_q_gt.get()
         random_init_rewards.sort(reverse=True)
-    # end of sigmoid mode block
-    t2 = time.time()
-    approx_time_per_cand = (t2 - t1) / args.num_samples
-
-    # sample of random initializations for true operator sequence
-    # -----------------------------------------------------------
-
-    random_ground_truth_rewards = []    
-    forcing_fex = FEX(
-        sample_indices=ground_truth_forcing_op_indices,
-        leaf_dim=fex_config.leaf_dim,
-        num_leaves=forcing_tree_config.num_leaves,
-        tree_structure=forcing_tree_config,
-        init_tau=fex_config.tau_start,
-    ).to(runtimeconfig.device)
-
-    inter_fex = FEX(
-        sample_indices=ground_truth_inter_op_indices,
-        leaf_dim=fex_config.leaf_dim * 2,
-        num_leaves=inter_tree_config.num_leaves,
-        tree_structure=inter_tree_config,
-        init_tau=fex_config.tau_start,
-    ).to(runtimeconfig.device)
-
-    t1 = time.time()
-    for _ in range(args.num_samples):
-        score = train_network_fex(forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config, use_entropy=False, verbose=False)
-        reward = 1.0 / (1.0 + score)
-        random_ground_truth_rewards.append(reward)
-        forcing_fex.reset(fex_config)
-        inter_fex.reset(fex_config)
-    t2 = time.time()
-    approx_rate_single_core = (t2 - t1) / args.num_samples
+        approx_time_per_cand = (t2 - t1) / args.num_samples
+        approx_rate_single_core = approx_time_per_cand  # both ran simultaneously
     random_init_rewards_np = np.asarray(random_init_rewards, dtype=np.float64)
     random_ground_truth_rewards_np = np.asarray(random_ground_truth_rewards, dtype=np.float64)
     t_stat, p_value = independent_t_test_greater(random_ground_truth_rewards_np, random_init_rewards_np)
@@ -293,7 +515,12 @@ def main():
         if p_value < args.alpha
         else "Fail to reject H0"
     )
-    baseline_name = "random_sequence" if args.mode == "default" else "sigmoid_sequence"
+    baseline_name_map = {
+        "default": "random_sequence",
+        "sigmoid": "sigmoid_sequence",
+        "inter_test": "sigmoid_mul_sigmoid_sequence",
+    }
+    baseline_name = baseline_name_map[args.mode]
     test_lines = [
         "One-sided independent two-sample t-test",
         f"H0: mean(ground_truth_rewards) <= mean({baseline_name}_rewards)",
@@ -306,6 +533,7 @@ def main():
     ]
     for line in test_lines:
         print(line)
+        train_logger.info(line)
     (save_dir / "hypothesis_test.txt").write_text("\n".join(test_lines) + "\n")
 
     random_ground_truth_rewards.sort(reverse=True)
@@ -318,7 +546,12 @@ def main():
     plt.xlabel("Candidate Index")
     plt.ylabel("Reward")
     plt.title("Rewards of Candidate Random Sample")
-    name = "Random" if args.mode=="default" else "Sigmoid"
+    name_map = {
+        "default": "Random",
+        "sigmoid": "Sigmoid",
+        "inter_test": "Sigmoid-Mul-Sigmoid",
+    }
+    name = name_map[args.mode]
     plt.legend([f"Average Reward ({name} Sequences): {np.mean(random_init_rewards):.4f}", f"Average Reward (Ground Truth): {np.mean(random_ground_truth_rewards):.4f}"])
     plt.figtext(0.02, 0.08, f"Independent t-test (one-sided) p={p_value:.3g}", ha="left", fontsize=9)
     plt.figtext(0.02, 0.12, f"time per cand (2 cores): {approx_time_per_cand:.2f} seconds", ha="left", fontsize=9)
@@ -327,4 +560,5 @@ def main():
 
 
 if __name__ == "__main__":
+    mp.set_start_method("spawn", force=True)
     main()

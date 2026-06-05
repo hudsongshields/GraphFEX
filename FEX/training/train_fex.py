@@ -9,16 +9,23 @@ import math
 from .loss_funcs import group_loss, mag_reverse_l2_regularization, total_loss
 from .tree_helpers import get_noise_stds
 
-def leaf_entropy(fex: FEX):
-    """Sum of entropies over all leaf logit distributions """
+def leaf_logit_closeness(fex: FEX):
+    """Return logit spread (variance around mean) per leaf."""
     total = torch.tensor(0.0, device=next(fex.parameters()).device)
     for leaf in fex.leaf_mlps:
-        probs = F.softmax(leaf.logits, dim=-1)
-        total = total - (probs * (probs + 1e-8).log()).sum()
+        logits = leaf.logits
+        if hasattr(leaf, "logit_mask"):
+            valid = leaf.logit_mask > -1e8
+            if valid.any():
+                logits = logits[valid]
+        if logits.numel() <= 1:
+            continue
+        centered = logits - logits.mean()
+        total = total + (centered ** 2).mean()
     return total
 
 
-def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_matrix, config: FEXConfig, device=runtimeconfig.device, use_entropy: bool = True, verbose: bool = False):
+def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_matrix, config: FEXConfig, device=runtimeconfig.device, verbose: bool = False):
     forcing_tree.train()
     inter_dynam_tree.train()
     forcing_tree_params = list(forcing_tree.all_parameters())
@@ -26,7 +33,7 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
 
 
     adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr, betas=(0.95, 0.999))
-    adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr, betas=(0.95, 0.999))
+    adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr) #, betas=(0.95, 0.999))
 
     lr_decay = config.lr_decay
     if lr_decay > 0:
@@ -61,22 +68,50 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
 
     inter_dynam_tree.train()
     forcing_tree.train()
+    tau_schedule = getattr(config, "tau_schedule", "exponential")
+    tau_max = float(config.tau_start)
+    tau_min = float(config.tau_end)
+    tau_horizon = max(float(config.tau_anneal_epochs) - 1.0, 1.0)
+
+    tau_decay_rate = None
+    if (
+        tau_schedule == "exponential"
+        and tau_max > 0.0
+        and tau_min > 0.0
+        and tau_max != tau_min
+    ):
+        tau_decay_rate = math.log(tau_max / tau_min) / tau_horizon
+
     for epoch in range(config.num_epochs):
-        anneal_epochs = config.tau_anneal_epochs
-        progress = min(epoch / max(anneal_epochs - 1, 1), 1.0)
-        current_tau = config.tau_start + (config.tau_end - config.tau_start) * progress
-        forcing_tree.set_leaf_tau(current_tau)
-        inter_dynam_tree.set_leaf_tau(current_tau)
+        if tau_schedule == "non_decay":
+            current_tau = tau_max
+        elif tau_schedule == "linear":
+            progress = min(float(epoch) / tau_horizon, 1.0)
+            current_tau = tau_max + (tau_min - tau_max) * progress
+        elif tau_decay_rate is not None:
+            if tau_max > tau_min:
+                current_tau = max(tau_min, tau_max * math.exp(-tau_decay_rate * float(epoch)))
+            else:
+                current_tau = min(tau_min, tau_max * math.exp(-tau_decay_rate * float(epoch)))
+        else:
+            current_tau = tau_max
+        
+        if hasattr(forcing_tree, "set_leaf_tau"):
+            forcing_tree.set_leaf_tau(current_tau)
+        if hasattr(inter_dynam_tree, "set_leaf_tau"):
+            inter_dynam_tree.set_leaf_tau(current_tau)
 
         
         if epoch == int(config.set_hard_at_epoch):
-            forcing_tree.set_leaf_hard(True)
-            inter_dynam_tree.set_leaf_hard(True)
+            if hasattr(forcing_tree, "set_leaf_hard"):
+                forcing_tree.set_leaf_hard(True)
+            if hasattr(inter_dynam_tree, "set_leaf_hard"):
+                inter_dynam_tree.set_leaf_hard(True)
         
         forcing_tree.train()
         inter_dynam_tree.train()
 
-        epoch_loss = 0.0
+        epoch_pred_loss = 0.0
         num_batches = 0
         for batch_x, batch_dy_val in dataloader:
             batch_dy_val = batch_dy_val[:, :, 0:1]  # only learn first dim of dx/dt
@@ -92,21 +127,26 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
 
             # main mse loss
             if config.num_groups == 1:
-                batch_loss = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
-                epoch_loss += batch_loss.detach().item()
+                pred_batch_loss = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
+                batch_loss = pred_batch_loss
+                epoch_pred_loss += pred_batch_loss.detach().item()
 
-            # Leaf Entropy - encourage dim exploration early, decay to 0
+            # Sign-controlled leaf regularizer:
+            use_entropy = config.leaf_entropy_weight != 0
             if use_entropy:
-                entropy_warmup = config.num_epochs * config.decay_entropy_until
-                entropy_weight = max(0.0, 1.0 - epoch / max(entropy_warmup, 1)) * config.leaf_entropy_weight
-                if entropy_weight > 0:
-                    entropy = leaf_entropy(forcing_tree) + leaf_entropy(inter_dynam_tree)
-                    batch_loss = batch_loss - entropy_weight * entropy
+                if config.decay_entropy_until > 0.0:
+                    entropy_warmup = config.num_epochs * config.decay_entropy_until
+                    entropy_weight = max(0.0, 1.0 - epoch / max(entropy_warmup, 1)) * config.leaf_entropy_weight
+                    if entropy_weight != 0:
+                        logit_spread = leaf_logit_closeness(forcing_tree) + leaf_logit_closeness(inter_dynam_tree)
+                        batch_loss = batch_loss - entropy_weight * logit_spread
+                else:
+                    logit_spread = leaf_logit_closeness(forcing_tree) + leaf_logit_closeness(inter_dynam_tree)
+                    batch_loss = batch_loss - config.leaf_entropy_weight * logit_spread
 
-            # Reverse L2 - encourage non-trivial solutions
+            # Reverse L2 - encourage non-trivial solutions (inter tree only)
             if (mag_entropy_weight := config.mag_entropy_weight) > 0:
-                mag_entropy = mag_reverse_l2_regularization(forcing_tree)
-                mag_entropy += mag_reverse_l2_regularization(inter_dynam_tree)
+                mag_entropy = mag_reverse_l2_regularization(inter_dynam_tree)
                 batch_loss = batch_loss + mag_entropy_weight * mag_entropy
 
             batch_loss.backward()
@@ -119,17 +159,18 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             scheduler_self.step()
             scheduler_inter.step()
 
-        mean_epoch_loss = epoch_loss / max(1, num_batches)
+        mean_epoch_pred_loss = epoch_pred_loss / max(1, num_batches)
 
-        if mean_epoch_loss < best_epoch_loss:
-            best_epoch_loss = mean_epoch_loss
+        if mean_epoch_pred_loss < best_epoch_loss:
+            best_epoch_loss = mean_epoch_pred_loss
             if config.bfgs_epochs > 0:
                 best_forcing_tree = forcing_tree.copy_inorder()
                 best_inter_tree = inter_dynam_tree.copy_inorder()
 
         if train_logger:
             train_logger.debug(f"Epoch {epoch+1}/{config.num_epochs}, Tau: {current_tau:.4f}")
-            train_logger.info(f"Adam Epoch {epoch+1}/{config.num_epochs}, Loss: {mean_epoch_loss:.4f}")
+            train_logger.info(f"Adam Epoch {epoch+1}/{config.num_epochs}, PredLoss: {mean_epoch_pred_loss:.4f}")
+            train_logger.debug(f'Equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}')
     
     if config.bfgs_epochs > 0:
         forcing_tree = best_forcing_tree.to(device)
@@ -163,8 +204,8 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             total_pred_error = 0.0
             for batch_x, batch_dy_val in bfgs_batches:
                 pred_error = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
-                entropy_error = config.leaf_entropy_weight * (leaf_entropy(forcing_tree) + leaf_entropy(inter_dynam_tree))
-                entropy_error += config.mag_entropy_weight * (mag_reverse_l2_regularization(forcing_tree) + mag_reverse_l2_regularization(inter_dynam_tree))
+                entropy_error = -config.leaf_entropy_weight * (leaf_logit_closeness(forcing_tree) + leaf_logit_closeness(inter_dynam_tree))
+                entropy_error += config.mag_entropy_weight * mag_reverse_l2_regularization(inter_dynam_tree)
                 accumulated_loss = accumulated_loss + pred_error + entropy_error
                 total_pred_error = total_pred_error + pred_error.detach().item()
 
@@ -182,7 +223,7 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
                 return best_epoch_loss
             return float('inf')
 
-        print(f"BFGS Loss: {bfgs_loss_val:.4f}, Best Epoch Loss: {best_epoch_loss:.4f}")
+        print(f"BFGS PredLoss: {bfgs_loss_val:.4f}, Best Adam PredLoss: {best_epoch_loss:.4f}")
         if bfgs_loss_val < best_epoch_loss:
             best_epoch_loss = bfgs_loss_val
         else:
@@ -201,7 +242,7 @@ if __name__ == "__main__":
     from .tree_helpers import visualize_tree
     from .debug import debug_tree_configs
 
-    run_str = "debugging/recover_all_terms_grok_NA_2"
+    run_str = "debugging/did_i_break_something9"
     save_path = Path(f"FEX/training/testing/{run_str}/final_inter_tree.png")
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -216,7 +257,7 @@ if __name__ == "__main__":
     dt = 0.01
     len_run = 500
     per_run_timesteps = int(len_run / dt)
-    resolution_factor = 3
+    resolution_factor = 1
     dt = dt * resolution_factor
 
     num_runs = num_timesteps // per_run_timesteps
@@ -243,7 +284,7 @@ if __name__ == "__main__":
     adj_matrix_tensor = torch.tensor(adj_matrix.values, dtype=torch.float32).to(runtimeconfig.device)
     x_data_tensor_ds = TensorDataset(train_x_data, train_dx_dt)
     if runtimeconfig.device == "cuda":
-        dataloader = DataLoader(x_data_tensor_ds, batch_size=64, shuffle=True, pin_memory=True)
+        dataloader = DataLoader(x_data_tensor_ds, batch_size=512, shuffle=True, pin_memory=True)
     else:
         dataloader = DataLoader(x_data_tensor_ds, batch_size=512, shuffle=True)
 
@@ -254,20 +295,23 @@ if __name__ == "__main__":
     inter_tree_config = get_tree_config("depth_2_tree_config")
 
     fex_config = FEXConfig(
-        num_epochs=120,
+        num_epochs=5000,
         bfgs_epochs=0,
         lr=0.02,
-        lr_decay=0.0,
+        inter_lr=0.02,
+        lr_decay=0.1,
+
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
         num_leaves=forcing_tree_config.num_leaves,
-        mag_entropy_weight=0,
-        pct_cosine_restart=1.0,
-        tau_start=3.0,
-        tau_end=0.01,
+
     )
-    fex_config.tau_anneal_epochs = fex_config.num_epochs * 1.0
     fex_config.leaf_entropy_weight = 0.0
+    fex_config.decay_entropy_until = 0.0
+    fex_config.mag_entropy_weight = 0.0
+
+    fex_config.pct_cosine_restart = 1.0
+    
 
 
     forcing_op_indices = torch.tensor([0, 0, 0, 0, 2, 1, 0], dtype=torch.long).to(runtimeconfig.device)
@@ -276,17 +320,21 @@ if __name__ == "__main__":
         leaf_dim=fex_config.leaf_dim,
         num_leaves=forcing_tree_config.num_leaves,
         tree_structure=forcing_tree_config,
-        init_tau=fex_config.tau_start,
     ).to(runtimeconfig.device)
 
-    inter_op_indices = torch.tensor([1, 0, 5], dtype=torch.long).to(runtimeconfig.device)
+    inter_op_indices = torch.tensor([1, 0, 3], dtype=torch.long).to(runtimeconfig.device)
     inter_fex = FEX(
         sample_indices=inter_op_indices,
         leaf_dim=fex_config.leaf_dim * 2,
         num_leaves=inter_tree_config.num_leaves,
         tree_structure=inter_tree_config,
-        init_tau=fex_config.tau_start,
     ).to(runtimeconfig.device)
+
+    with torch.no_grad():
+        if hasattr(inter_fex.leaf_mlps[0], "logit_mask"):
+            inter_fex.leaf_mlps[0].logit_mask[fex_config.leaf_dim:].fill_(-1e9) 
+        if hasattr(inter_fex.leaf_mlps[1], "logit_mask"):
+            inter_fex.leaf_mlps[1].logit_mask[:fex_config.leaf_dim].fill_(-1e9) 
 
 
     """ FOR DEBUGGING """
@@ -321,7 +369,7 @@ if __name__ == "__main__":
     loss_history = []
     coeff_history = []
     try:
-        loss = train_network_fex(forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config, use_entropy=False, verbose=True)
+        loss = train_network_fex(forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config, verbose=True)
     except KeyboardInterrupt:
         print("\nTraining interrupted, saving current state")
         loss = float('inf')

@@ -2,6 +2,7 @@ import argparse
 import os
 import multiprocessing as mp
 from pathlib import Path
+from random import random
 
 import numpy as np
 import pandas as pd
@@ -87,8 +88,17 @@ def make_dataloader(x_data, dx_dt):
         pin_memory=pin_memory,
     )
 
+def seed_everything(seed=42):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 def main():
+    seed_everything(42) # for reproducibility
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_workers", type=int, default=None)
     args = parser.parse_args()
@@ -107,18 +117,19 @@ def main():
     controller_config = ControllerConfig(
         input_dim=20,
         hidden_dim=64,
-        lr=0.02,
+        lr=0.05,
         num_epochs=200,
         num_cands_per_epoch=10,
-        percentile_threshold=0.4,
+        percentile_threshold=0.2,
         num_trees=2,
+        epsilon_greedy=0.3
     )
 
     fex_config = FEXConfig(
-        num_epochs=120,
+        num_epochs=100,
         bfgs_epochs=0,
-        lr=0.15,
-        inter_lr=0.05,
+        lr=0.05,
+        inter_lr=0.02,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
         num_leaves=forcing_tree_config.num_leaves,

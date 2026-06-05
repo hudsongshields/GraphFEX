@@ -16,6 +16,7 @@ class UnaryOperation(nn.Module):
         self.b = nn.Parameter(torch.randn((1)) * self.scale)
         self.op = op
 
+
     def forward(self, x: torch.Tensor):
         return self.a * self.op(x) + self.b
     

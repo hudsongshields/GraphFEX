@@ -45,7 +45,19 @@ def fex_state_dict(fex, *args, **kwargs):
     state["_meta_num_leaves"] = int(len(fex.leaf_mlps))
 
     if fex.parent_node is not None:
-        state.update(node_state_dict(fex.parent_node, prefix="tree."))
+        # Some Node variants do not implement state_dict/load_state_dict methods.
+        # Only call those methods when present; otherwise use recursive helper.
+        if hasattr(fex.parent_node, "state_dict"):
+            try:
+                tree_state = fex.parent_node.state_dict(prefix="tree.")
+                if isinstance(tree_state, dict):
+                    state.update(tree_state)
+                else:
+                    state.update(node_state_dict(fex.parent_node, prefix="tree."))
+            except Exception:
+                state.update(node_state_dict(fex.parent_node, prefix="tree."))
+        else:
+            state.update(node_state_dict(fex.parent_node, prefix="tree."))
     return state
 
 
@@ -69,7 +81,13 @@ def fex_load_state_dict(fex, checkpoint, strict=True):
 
     result = nn.Module.load_state_dict(fex, module_state, strict=strict)
     if fex.parent_node is not None and len(tree_state) > 0:
-        node_load_state_dict(fex.parent_node, tree_state, prefix="tree.")
+        if hasattr(fex.parent_node, "load_state_dict"):
+            try:
+                fex.parent_node.load_state_dict(tree_state, prefix="tree.")
+            except Exception:
+                node_load_state_dict(fex.parent_node, tree_state, prefix="tree.")
+        else:
+            node_load_state_dict(fex.parent_node, tree_state, prefix="tree.")
 
     return result
 

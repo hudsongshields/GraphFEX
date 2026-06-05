@@ -54,16 +54,16 @@ class ControllerConfig():
     percentile_threshold: float = 0.5
     poolsize: int = 10
 
-    epsilon_greedy: float = 0.1
+    epsilon_greedy: float = 0.3
 
 @dataclass
 class FEXConfig():
     num_groups: int = 1
     leaf_dim: int = None
     num_leaves: int = None
-    leaf_entropy_weight: float = 0.8
-    decay_entropy_until: float = 1.0
-    set_hard_at: float = 1.1
+    leaf_entropy_weight: float = 0.0
+    decay_entropy_until: float = 0.0
+    set_hard_at: float = 1.0
 
     lr: float = 0.02
     inter_lr: float = 0.008
@@ -75,9 +75,10 @@ class FEXConfig():
 
     tau_start: float = 8.0
     tau_end: float = 4.0
+    tau_schedule: str = "exponential"  # one of: exponential, linear, non_decay
 
     # Regularization
-    mag_entropy_weight: float = 0.0 # weight for magnitude entropy regularization
+    mag_entropy_weight: float = 0.0 
     pct_cosine_restart: float = 1.0
     
     def __post_init__(self):

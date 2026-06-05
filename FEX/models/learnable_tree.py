@@ -3,7 +3,6 @@ __all__ = ["FEX"]
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from .nodes import Node
 from ..utils.tree_configs import TREE_CONFIGS
 
@@ -13,42 +12,58 @@ tree_logger = logging.getLogger("debug_tree")
 from ..training.tree_helpers import traverse, fex_state_dict, fex_load_state_dict
 
 class LeafMLP(nn.Module):
-    def __init__(self, input_dim, init_tau=1.0, hard=False):
+    def __init__(self, input_dim, **kwargs):
         super().__init__()
         self.logits = nn.Parameter(torch.randn(input_dim) * 0.1)
-        self.register_buffer("tau", torch.tensor(init_tau, dtype=torch.float32))
-        self.hard = hard
+        self.register_buffer("logit_mask", torch.zeros(input_dim))
+        
     
     def forward(self, leaf_input: torch.Tensor):
-        logits = self.logits
-        weights = F.gumbel_softmax(logits, dim=-1, hard=self.hard, tau=float(self.tau.item()))
-        out = (weights * leaf_input).sum(dim=-1, keepdim=True)
-        return out
+        # generate random val from uniform dis
+        prob = torch.rand(1).item()
+        logit_push = torch.zeros_like(self.logits)
+        if self.training and prob > 0.9:
+            random_idx = torch.randint(0, self.logits.size(0), (1,))
+            logit_push[random_idx] = 10.0
+        probs = torch.softmax(self.logits + self.logit_mask + logit_push, dim=-1)
+        return torch.sum(leaf_input * probs, dim=-1, keepdim=True)
+
+    def reset_parameters(self):
+        with torch.no_grad():
+            self.logits.normal_(mean=0.0, std=0.1)
 
     """ Gumbel softmax control """
     def set_hard(self, hard: bool):
-        self.hard = hard
+        pass
 
     def set_tau(self, tau: float):
-        self.tau.fill_(max(float(tau), 1e-3))
+        pass
+
+    def get_tau(self):
+        return 0.0
 
     
     """ Printable expression """
     def _selected_dim(self):
-        return int(self.logits.argmax().item())
+        return int((self.logits + self.logit_mask).detach().argmax().item())
 
     def _selection_confidence(self):
-        probs = torch.softmax(self.logits.detach(), dim=-1)
+        # Confidence proxy based on normalized absolute linear weights.
+        masked = (self.logits + self.logit_mask).detach().abs()
+        probs = torch.softmax(masked, dim=-1)
         return float(probs.max().item())
 
     def __str__(self):
-        selected_dim = self._selected_dim()
-        confidence = self._selection_confidence()
-        return f"x[{selected_dim}] (conf: {confidence:.2f})" 
+        probs = torch.softmax((self.logits + self.logit_mask).detach(), dim=-1)
+        terms = [f"{float(w):.4f}*x[{i}]" for i, w in enumerate(probs)]
+        if not terms:
+            return "0"
+        expr = " ".join(terms)
+        return expr.strip()
     
 
 class FEX(nn.Module):
-    def __init__(self, leaf_dim, num_leaves, sample_indices=None, tree_structure=None, parent_node=None, init_tau=5.0): 
+    def __init__(self, leaf_dim, num_leaves, sample_indices=None, tree_structure=None, parent_node=None, init_tau=5.0, hard=False, **kwargs): 
         super().__init__()
         self.leaf_dim = leaf_dim
         
@@ -61,7 +76,7 @@ class FEX(nn.Module):
         else:
             self.parent_node = None
 
-        leaf_mlps = [LeafMLP(self.leaf_dim, init_tau) for _ in range(num_leaves)]
+        leaf_mlps = [LeafMLP(self.leaf_dim, init_tau=init_tau, hard=hard) for _ in range(num_leaves)]
         for idx, leaf in enumerate(leaf_mlps):
             leaf._debug_leaf_idx = idx
         self.leaf_mlps = nn.ModuleList(leaf_mlps)
