@@ -18,7 +18,10 @@ HR/logs/
 __pycache__/
 *.pyc
 /shell_scripts/
+
 HR/fex_eval_*
 HR/sigmoid_eval/
 HR/inter_test
 HR/sigmoid
+HR/default
+HR/logs1

@@ -40,12 +40,12 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
         scheduler_self = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             adam_optim_self,
             T_0=max(int(config.num_epochs * config.pct_cosine_restart), 1),
-            eta_min=config.lr * lr_decay
+            eta_min=0.0
         )
         scheduler_inter = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             adam_optim_inter,
             T_0=max(int(config.num_epochs * config.pct_cosine_restart), 1),
-            eta_min=config.inter_lr * lr_decay
+            eta_min=0.0
         )
 
 

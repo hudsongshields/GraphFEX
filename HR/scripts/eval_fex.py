@@ -1,6 +1,7 @@
 import argparse
 import math
 import logging
+import logging
 import os
 import multiprocessing as mp
 from pathlib import Path
@@ -31,7 +32,7 @@ def setup_run_dir(num_epochs, batchsize, job_id=None, mode="default") -> Path:
     else:
         job_id = ""
     run_id = f"e_{num_epochs}_b_{batchsize}_{job_id}"
-    run_dir = HR_DIR / f"{mode}" / f"run_{run_id}"
+    run_dir = HR_DIR / "logs" / f"{mode}" / f"run_{run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "pre_finetune").mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -58,6 +59,7 @@ def load_hr_data():
     dt = 0.01
     len_run = 500
     per_run_timesteps = int(len_run / dt)
+    resolution_factor = 1
     resolution_factor = 1
 
     num_runs = num_timesteps // per_run_timesteps
@@ -162,8 +164,9 @@ def _apply_inter_leaf_masks(inter_fex: FEX, node_dim: int) -> None:
     if len(inter_fex.leaf_mlps) < 2:
         return
     with torch.no_grad():
-        inter_fex.leaf_mlps[0].logit_mask[node_dim:].fill_(-1e9)
-        inter_fex.leaf_mlps[1].logit_mask[:node_dim].fill_(-1e9)
+        if hasattr(inter_fex.leaf_mlps[0], "logit_mask"):
+            inter_fex.leaf_mlps[0].logit_mask[node_dim:].fill_(-1e9)
+            inter_fex.leaf_mlps[1].logit_mask[:node_dim].fill_(-1e9)
 
 
 def _save_top_candidate_visualizations(
@@ -281,8 +284,7 @@ def main():
     parser.add_argument("--num_samples", type=int, default=30)
     parser.add_argument("--top_k_viz", type=int, default=1)
     parser.add_argument("--num_epochs", type=int, default=60)
-    parser.add_argument("--mode", type=str, default="default", choices=["default", "sigmoid", "inter_test"])
-    parser.add_argument("--lr_decay", type=float, default=0.0)
+    parser.add_argument("--mode", type=str, default="default", choices=["default", "sigmoid"])
     args = parser.parse_args()
 
     run_dir = setup_run_dir(args.num_epochs, args.batch_size, job_id=args.job_id, mode=args.mode)
@@ -316,25 +318,17 @@ def main():
     fex_config = FEXConfig(
         num_epochs=args.num_epochs,
         bfgs_epochs=0,
-        lr=0.02,
-        inter_lr=0.02,
-        lr_decay=0.01,
+        lr=0.15,
+        inter_lr=0.05,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
         num_leaves=forcing_tree_config.num_leaves,
         pct_cosine_restart=1.0,
-        tau_start=8.0,
-        tau_end=0.1,
+        tau_start=4.0,
+        tau_end=0.015,
     )
-    fex_config.tau_anneal_epochs = fex_config.num_epochs * 1.0
-    fex_config.leaf_entropy_weight = -1e-8
-    fex_config.decay_entropy_until = 0.0
-    fex_config.mag_entropy_weight = 0.0
-    fex_config.set_hard_at_epoch = fex_config.num_epochs * 1.0
-    fex_config.tau_schedule = "exponential"
 
-
-
+    # Ground-truth indices (immutable baseline for comparison)
     ground_truth_forcing_op_indices = torch.tensor([0, 0, 0, 0, 1, 2, 0], dtype=torch.long).to(runtimeconfig.device)
     ground_truth_inter_op_indices = torch.tensor([1, 0, 3], dtype=torch.long).to(runtimeconfig.device)
     
