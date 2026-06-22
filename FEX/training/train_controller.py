@@ -7,7 +7,6 @@ from ..models.learnable_tree import FEX
 from ..models.nodes import Node
 from ..utils.sampler import epsilon_greedy_sample
 from .train_fex import train_network_fex
-from .tree_helpers import apply_inter_leaf_masks
 from .train_configs import ControllerConfig, FEXConfig, runtimeconfig
 from ..utils.pools import GraphPoolCandidate, GraphPool
 
@@ -52,7 +51,6 @@ def eval_candidate(k_cand, gpu_id, op_indices):
 
     inter_fex = FEX(sample_indices=inter_dynam_op_indices, **inter_fex_kwargs).to(device)
     forcing_fex = FEX(sample_indices=forcing_op_indices, **fex_kwargs).to(device)
-    apply_inter_leaf_masks(inter_fex, fex_config_global.leaf_dim)
 
     score = train_network_fex(
         forcing_fex,
@@ -69,15 +67,8 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     else:
         reward = 1.0 / (1.0 + score)
 
-    for param in forcing_fex.parameters():
-        param.requires_grad = False
-        param.data = param.data.cpu()
-    for param in inter_fex.parameters():
-        param.requires_grad = False
-        param.data = param.data.cpu()
-    
-    inter_fex = inter_fex.cpu()
-    forcing_fex = forcing_fex.cpu()
+    forcing_fex = forcing_fex.copy_inorder().to(torch.device("cpu"))
+    inter_fex = inter_fex.copy_inorder().to(torch.device("cpu"))
     if k_cand == 0:
         logger.info(f"Sampled candidate {k_cand} with score {score:.4f}\n self dynamics: {forcing_fex}\n inter dynamics: {inter_fex}")
     return op_indices, reward, k_cand, forcing_fex, inter_fex

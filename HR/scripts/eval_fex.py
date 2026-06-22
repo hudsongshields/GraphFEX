@@ -12,7 +12,6 @@ import pandas as pd
 from scipy.stats import ttest_ind
 from FEX.models.learnable_tree import FEX
 from FEX.training.train_fex import train_network_fex
-from FEX.training.tree_helpers import apply_inter_leaf_masks
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -145,7 +144,6 @@ def _log_fex_trees(
         tree_structure=inter_tree_config,
         init_tau=fex_config.tau_start,
     ).to(device)
-    _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
 
     logger.info(f"[{label}] forcing tree: {str(forcing_fex)}")
     logger.info(f"[{label}] inter tree:   {str(inter_fex)}")
@@ -158,11 +156,6 @@ def _log_fex_trees(
         visualize_tree(inter_fex, filename=str(viz_dir / f"{safe_label}_inter_tree"))
     except Exception as e:
         logger.warning(f"[{label}] graphviz render failed: {e}")
-
-
-def _apply_inter_leaf_masks(inter_fex: FEX, node_dim: int) -> None:
-    """Match train_fex masking: leaf0 uses self dims, leaf1 uses neighbor dims."""
-    apply_inter_leaf_masks(inter_fex, node_dim)
 
 
 def _save_top_candidate_visualizations(
@@ -262,7 +255,6 @@ def _run_fex_samples(
         tree_structure=inter_tree_config,
         init_tau=fex_config.tau_start,
     ).to(device)
-    _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
 
     rewards = []
     top_records: list[dict] = []
@@ -286,7 +278,6 @@ def _run_fex_samples(
 
         forcing_fex.reset(fex_config)
         inter_fex.reset(fex_config)
-        _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
 
     _save_top_candidate_visualizations(top_records, save_dir=save_dir, label=label, logger=runtimeconfig.train_logger)
 
@@ -391,7 +382,6 @@ def main():
             tree_structure=inter_tree_config,
             init_tau=fex_config.tau_start,
         ).to(runtimeconfig.device)
-        _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
         t1 = time.time()
         gt_top_records: list[dict] = []
         for sample_idx in range(args.num_samples):
@@ -415,7 +405,6 @@ def main():
 
             forcing_fex.reset(fex_config)
             inter_fex.reset(fex_config)
-            _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
         t2 = time.time()
         approx_rate_single_core = (t2 - t1) / args.num_samples
 
