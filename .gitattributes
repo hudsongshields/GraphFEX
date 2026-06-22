@@ -2,3 +2,4 @@
 HR/data/HR_timeseries_BA.csv filter=lfs diff=lfs merge=lfs -text
 HR/data/BA_Nnodes100_Adj_deg_10_0.csv filter=lfs diff=lfs merge=lfs -text
 HR/data/HR_timeseries_BA_deg_10_0.csv filter=lfs diff=lfs merge=lfs -text
+HR/data/*.csv filter=lfs diff=lfs merge=lfs -text
