@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 import math
 from .loss_funcs import group_loss, mag_reverse_l2_regularization, total_loss
-from .tree_helpers import get_noise_stds
+from .tree_helpers import copy_fex_state_, get_noise_stds
 
 def leaf_logit_closeness(fex: FEX):
     """Return logit spread (variance around mean) per leaf."""
@@ -173,9 +173,9 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             train_logger.debug(f'Equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}')
     
     if config.bfgs_epochs > 0:
-        forcing_tree = best_forcing_tree.to(device)
-        inter_dynam_tree = best_inter_tree.to(device)
-        all_parameters = list(forcing_tree.all_parameters()) + list(inter_dynam_tree.all_parameters())
+        bfgs_forcing_tree = best_forcing_tree.to(device)
+        bfgs_inter_tree = best_inter_tree.to(device)
+        all_parameters = list(bfgs_forcing_tree.all_parameters()) + list(bfgs_inter_tree.all_parameters())
         bfgs_optim = torch.optim.LBFGS(
             all_parameters,
             lr=config.bfgs_lr,
@@ -203,32 +203,49 @@ def train_network_fex(forcing_tree: FEX, inter_dynam_tree: FEX, dataloader, adj_
             accumulated_loss = 0.0
             total_pred_error = 0.0
             for batch_x, batch_dy_val in bfgs_batches:
-                pred_error = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
-                entropy_error = -config.leaf_entropy_weight * (leaf_logit_closeness(forcing_tree) + leaf_logit_closeness(inter_dynam_tree))
-                entropy_error += config.mag_entropy_weight * mag_reverse_l2_regularization(inter_dynam_tree)
+                pred_error = total_loss(batch_x, batch_dy_val, bfgs_forcing_tree, bfgs_inter_tree, nodes, edges, scatter_idx)
+                entropy_error = -config.leaf_entropy_weight * (leaf_logit_closeness(bfgs_forcing_tree) + leaf_logit_closeness(bfgs_inter_tree))
+                entropy_error += config.mag_entropy_weight * mag_reverse_l2_regularization(bfgs_inter_tree)
                 accumulated_loss = accumulated_loss + pred_error + entropy_error
                 total_pred_error = total_pred_error + pred_error.detach().item()
 
             accumulated_loss.backward()
-            return total_pred_error / len(bfgs_batches)
+            return accumulated_loss / len(bfgs_batches)
 
-        bfgs_loss = bfgs_optim.step(closure)
-        bfgs_loss_val = bfgs_loss.item() if isinstance(bfgs_loss, torch.Tensor) else float(bfgs_loss)
+        bfgs_optim.step(closure)
+        with torch.no_grad():
+            final_pred_losses = [
+                total_loss(
+                    batch_x,
+                    batch_dy_val,
+                    bfgs_forcing_tree,
+                    bfgs_inter_tree,
+                    nodes,
+                    edges,
+                    scatter_idx,
+                ).item()
+                for batch_x, batch_dy_val in bfgs_batches
+            ]
+        bfgs_loss_val = sum(final_pred_losses) / len(final_pred_losses)
         # train_logger.info(f"BFGS Completed (max_iter={config.bfgs_epochs}), Loss: {bfgs_loss_val:.4f}")
 
         if not math.isfinite(bfgs_loss_val):
             # train_logger.warning(f"BFGS produced non-finite loss: {bfgs_loss_val}")
             if best_epoch_loss != float('inf'):
                 # train_logger.info(f"Returning best epoch loss from Adam phase: {best_epoch_loss:.4f}")
+                copy_fex_state_(forcing_tree, best_forcing_tree)
+                copy_fex_state_(inter_dynam_tree, best_inter_tree)
                 return best_epoch_loss
             return float('inf')
 
         print(f"BFGS PredLoss: {bfgs_loss_val:.4f}, Best Adam PredLoss: {best_epoch_loss:.4f}")
         if bfgs_loss_val < best_epoch_loss:
             best_epoch_loss = bfgs_loss_val
+            copy_fex_state_(forcing_tree, bfgs_forcing_tree)
+            copy_fex_state_(inter_dynam_tree, bfgs_inter_tree)
         else:
-            forcing_tree = best_forcing_tree.to(device)
-            inter_dynam_tree = best_inter_tree.to(device)
+            copy_fex_state_(forcing_tree, best_forcing_tree)
+            copy_fex_state_(inter_dynam_tree, best_inter_tree)
 
     return float(best_epoch_loss)
 
@@ -314,7 +331,7 @@ if __name__ == "__main__":
     
 
 
-    forcing_op_indices = torch.tensor([0, 0, 0, 0, 2, 1, 0], dtype=torch.long).to(runtimeconfig.device)
+    forcing_op_indices = torch.tensor([0, 0, 0, 0, 1, 2, 0], dtype=torch.long).to(runtimeconfig.device)
     forcing_fex = FEX(
         sample_indices=forcing_op_indices,
         leaf_dim=fex_config.leaf_dim,

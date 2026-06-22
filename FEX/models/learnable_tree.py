@@ -55,11 +55,9 @@ class LeafMLP(nn.Module):
 
     def __str__(self):
         probs = torch.softmax((self.logits + self.logit_mask).detach(), dim=-1)
-        terms = [f"{float(w):.4f}*x[{i}]" for i, w in enumerate(probs)]
-        if not terms:
-            return "0"
-        expr = " ".join(terms)
-        return expr.strip()
+        selected_dim = int(probs.argmax().item())
+        confidence = float(probs[selected_dim].item())
+        return f"x[{selected_dim}]@{confidence:.3f}"
     
 
 class FEX(nn.Module):
@@ -217,6 +215,81 @@ class FEX(nn.Module):
     def __str__(self):
         leaf_expressions = [str(leaf_mlp) for leaf_mlp in self.leaf_mlps]
         return self.parent_node.__str__(leaf_expressions=leaf_expressions)
+
+    def symbolic_expression(self, variable_names=None, digits: int = 4, threshold: float = 1e-6):
+        """Build and simplify the hard-selected FEX expression with SymPy."""
+        import sympy as sp
+
+        if variable_names is None:
+            variable_names = [f"x{i + 1}" for i in range(self.leaf_dim)]
+        if len(variable_names) != self.leaf_dim:
+            raise ValueError(
+                f"Expected {self.leaf_dim} variable names, got {len(variable_names)}."
+            )
+
+        symbols = sp.symbols(" ".join(variable_names))
+        if self.leaf_dim == 1:
+            symbols = (symbols,)
+
+        leaf_expressions = [
+            symbols[leaf._selected_dim()]
+            for leaf in self.leaf_mlps
+        ]
+
+        def rounded_parameter(value):
+            number = round(float(value.detach().item()), digits)
+            return sp.Float(0.0 if abs(number) < threshold else number)
+
+        def build(node):
+            if node.operation_type == "leaf":
+                return leaf_expressions[node.leaf_idx]
+
+            if node.operation_type == "binary":
+                left = build(node.left)
+                right = build(node.right)
+                op_name = node.operation.op.__name__
+                if op_name == "add":
+                    return left + right
+                if op_name == "sub":
+                    return left - right
+                if op_name == "mul":
+                    return left * right
+                if op_name == "safe_div":
+                    return left / right
+                raise ValueError(f"Unsupported binary operator: {op_name}")
+
+            child = build(node.left)
+            op_name = node.operation.op.__name__
+            if op_name == "identity":
+                transformed = child
+            elif op_name == "square":
+                transformed = child ** 2
+            elif op_name == "cube":
+                transformed = child ** 3
+            elif op_name == "fourth_power":
+                transformed = child ** 4
+            elif op_name == "safe_exp":
+                transformed = sp.exp(child)
+            elif op_name == "sigmoid":
+                transformed = 1 / (1 + sp.exp(-child))
+            elif op_name == "safe_reciprocal":
+                transformed = 1 / child
+            else:
+                raise ValueError(f"Unsupported unary operator: {op_name}")
+
+            return rounded_parameter(node.operation.a) * transformed + rounded_parameter(node.operation.b)
+
+        expanded = sp.expand(build(self.parent_node))
+        retained_terms = []
+        for term in sp.Add.make_args(expanded):
+            coefficient, _ = term.as_coeff_Mul()
+            if not coefficient.is_number or abs(float(coefficient)) >= threshold:
+                retained_terms.append(term)
+
+        return sp.simplify(sp.Add(*retained_terms))
+
+    def simplified_expression(self, variable_names=None, digits: int = 4, threshold: float = 1e-6):
+        return str(self.symbolic_expression(variable_names, digits, threshold))
     
     """ external member functions """
     def visualize_tree(self, directory: str = "fex_tree_viz", clear_directory: bool = True):

@@ -5,6 +5,7 @@ mplcyberpunk
 networkx
 onnx
 onnxruntime
+sympy
 torch-geometric
 tqdm
 xxhash

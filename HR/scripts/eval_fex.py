@@ -12,6 +12,7 @@ import pandas as pd
 from scipy.stats import ttest_ind
 from FEX.models.learnable_tree import FEX
 from FEX.training.train_fex import train_network_fex
+from FEX.training.tree_helpers import apply_inter_leaf_masks
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -161,12 +162,7 @@ def _log_fex_trees(
 
 def _apply_inter_leaf_masks(inter_fex: FEX, node_dim: int) -> None:
     """Match train_fex masking: leaf0 uses self dims, leaf1 uses neighbor dims."""
-    if len(inter_fex.leaf_mlps) < 2:
-        return
-    with torch.no_grad():
-        if hasattr(inter_fex.leaf_mlps[0], "logit_mask"):
-            inter_fex.leaf_mlps[0].logit_mask[node_dim:].fill_(-1e9)
-            inter_fex.leaf_mlps[1].logit_mask[:node_dim].fill_(-1e9)
+    apply_inter_leaf_masks(inter_fex, node_dim)
 
 
 def _save_top_candidate_visualizations(
@@ -189,19 +185,41 @@ def _save_top_candidate_visualizations(
     top_dir.mkdir(parents=True, exist_ok=True)
 
     lines = ["rank,sample_idx,reward"]
+    expression_lines = []
     for rank, rec in enumerate(top_records, start=1):
         reward = float(rec["reward"])
         sample_idx = int(rec["sample_idx"])
         lines.append(f"{rank},{sample_idx},{reward:.8f}")
 
         prefix = f"rank_{rank:02d}_sample_{sample_idx:03d}_reward_{reward:.6f}"
+        forcing_tree = rec["forcing_tree"]
+        inter_tree = rec["inter_tree"]
+        forcing_names = ["x", "y", "z"] if forcing_tree.leaf_dim == 3 else None
+        inter_names = (
+            ["x_i", "y_i", "z_i", "x_j", "y_j", "z_j"]
+            if inter_tree.leaf_dim == 6
+            else None
+        )
+        forcing_expr = forcing_tree.simplified_expression(forcing_names)
+        inter_expr = inter_tree.simplified_expression(inter_names)
+        expression_lines.extend(
+            [
+                f"rank {rank} sample {sample_idx} reward {reward:.8f}",
+                f"forcing: {forcing_expr}",
+                f"interaction: {inter_expr}",
+                "",
+            ]
+        )
+        logger.info(f"[{label}] rank {rank} forcing: {forcing_expr}")
+        logger.info(f"[{label}] rank {rank} interaction: {inter_expr}")
         try:
-            visualize_tree(rec["forcing_tree"], filename=str(top_dir / f"{prefix}_forcing_tree"))
-            visualize_tree(rec["inter_tree"], filename=str(top_dir / f"{prefix}_inter_tree"))
+            visualize_tree(forcing_tree, filename=str(top_dir / f"{prefix}_forcing_tree"))
+            visualize_tree(inter_tree, filename=str(top_dir / f"{prefix}_inter_tree"))
         except Exception as e:
             logger.warning(f"[{label}] failed to render top candidate rank {rank}: {e}")
 
     (top_dir / "summary.csv").write_text("\n".join(lines) + "\n")
+    (top_dir / "expressions.txt").write_text("\n".join(expression_lines))
     logger.info(f"[{label}] saved top candidate visualizations to {top_dir}")
 
 
@@ -379,7 +397,7 @@ def main():
         for sample_idx in range(args.num_samples):
             score = train_network_fex(
                 forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config,
-                use_entropy=False, verbose=(sample_idx == 0),
+                verbose=(sample_idx == 0),
             )
             reward = 1.0 / (1.0 + score)
             random_ground_truth_rewards.append(reward)

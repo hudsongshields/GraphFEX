@@ -19,6 +19,24 @@ def traverse(node, action):
         traverse(node.right, action)
 
 
+def apply_inter_leaf_masks(inter_fex, node_dim: int) -> None:
+    """Constrain pairwise interaction leaves to source and neighbor feature blocks."""
+    if inter_fex is None or len(getattr(inter_fex, "leaf_mlps", [])) < 2:
+        return
+
+    with torch.no_grad():
+        if hasattr(inter_fex.leaf_mlps[0], "logit_mask"):
+            inter_fex.leaf_mlps[0].logit_mask[node_dim:].fill_(-1e9)
+        if hasattr(inter_fex.leaf_mlps[1], "logit_mask"):
+            inter_fex.leaf_mlps[1].logit_mask[:node_dim].fill_(-1e9)
+
+
+def copy_fex_state_(target, source) -> None:
+    """Copy a trained FEX state into an existing FEX object in-place."""
+    target.load_state_dict(source.state_dict(), strict=False)
+    target.to(next(source.parameters()).device)
+
+
 """ Debugging Helpers for FEX """
 def get_noise_stds(fex) -> dict[str, torch.Tensor]:
     noise_stds = {}

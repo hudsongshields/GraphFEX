@@ -7,6 +7,7 @@ from ..models.learnable_tree import FEX
 from ..models.nodes import Node
 from ..utils.sampler import epsilon_greedy_sample
 from .train_fex import train_network_fex
+from .tree_helpers import apply_inter_leaf_masks
 from .train_configs import ControllerConfig, FEXConfig, runtimeconfig
 from ..utils.pools import GraphPoolCandidate, GraphPool
 
@@ -51,6 +52,7 @@ def eval_candidate(k_cand, gpu_id, op_indices):
 
     inter_fex = FEX(sample_indices=inter_dynam_op_indices, **inter_fex_kwargs).to(device)
     forcing_fex = FEX(sample_indices=forcing_op_indices, **fex_kwargs).to(device)
+    apply_inter_leaf_masks(inter_fex, fex_config_global.leaf_dim)
 
     score = train_network_fex(
         forcing_fex,
@@ -78,7 +80,7 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     forcing_fex = forcing_fex.cpu()
     if k_cand == 0:
         logger.info(f"Sampled candidate {k_cand} with score {score:.4f}\n self dynamics: {forcing_fex}\n inter dynamics: {inter_fex}")
-    return op_indices, reward, k_cand
+    return op_indices, reward, k_cand, forcing_fex, inter_fex
 
 
 def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, adj_matrix, fex_config, logger_path=None):
@@ -166,9 +168,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
             results = pool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
             t2 = time.time()
             train_logger.info(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
-            for op_indices, reward, k_cand in results:
-                inter_tree = FEX(sample_indices=op_indices[len(self_ops_per_node):len(self_ops_per_node) + len(inter_ops_per_node)], **inter_fex_kwargs)
-                forcing_tree = FEX(sample_indices=op_indices[:len(self_ops_per_node)], **fex_kwargs)
+            for op_indices, reward, k_cand, forcing_tree, inter_tree in results:
                 candidate = GraphPoolCandidate(inter_tree=inter_tree, forcing_tree=forcing_tree, reward=reward, id=int(k_cand + epoch * config.num_cands_per_epoch))
                 top_epoch_cands.add_new(candidate)
 
