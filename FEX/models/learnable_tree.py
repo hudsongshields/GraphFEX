@@ -14,23 +14,18 @@ from ..training.tree_helpers import traverse, fex_state_dict, fex_load_state_dic
 class LeafMLP(nn.Module):
     def __init__(self, input_dim, **kwargs):
         super().__init__()
+        # One unrestricted coefficient per input dimension, matching the FEX paper.
         self.logits = nn.Parameter(torch.randn(input_dim) * 0.1)
-        self.register_buffer("logit_mask", torch.zeros(input_dim))
+        self.bias = nn.Parameter(torch.zeros(1))
         
-    
-    def forward(self, leaf_input: torch.Tensor):
-        # generate random val from uniform dis
-        prob = torch.rand(1).item()
-        logit_push = torch.zeros_like(self.logits)
-        if self.training and prob > 0.9:
-            random_idx = torch.randint(0, self.logits.size(0), (1,))
-            logit_push[random_idx] = 10.0
-        probs = torch.softmax(self.logits + self.logit_mask + logit_push, dim=-1)
-        return torch.sum(leaf_input * probs, dim=-1, keepdim=True)
+    def forward(self, leaf_input: torch.Tensor, unary_op=None):
+        transformed = unary_op(leaf_input) if unary_op is not None else leaf_input
+        return torch.sum(transformed * self.logits, dim=-1, keepdim=True) + self.bias
 
     def reset_parameters(self):
         with torch.no_grad():
             self.logits.normal_(mean=0.0, std=0.1)
+            self.bias.zero_()
 
     """ Gumbel softmax control """
     def set_hard(self, hard: bool):
@@ -45,21 +40,20 @@ class LeafMLP(nn.Module):
     
     """ Printable expression """
     def _selected_dim(self):
-        return int((self.logits + self.logit_mask).detach().argmax().item())
+        return int(self.logits.detach().abs().argmax().item())
 
     def _selection_confidence(self):
-        # Confidence proxy based on normalized absolute linear weights.
-        masked = (self.logits + self.logit_mask).detach().abs()
-        probs = torch.softmax(masked, dim=-1)
+        probs = torch.softmax(self.logits.detach().abs(), dim=-1)
         return float(probs.max().item())
 
     def __str__(self):
-        probs = torch.softmax((self.logits + self.logit_mask).detach(), dim=-1)
-        terms = [f"{float(w):.4f}*x[{i}]" for i, w in enumerate(probs)]
-        if not terms:
-            return "0"
-        expr = " ".join(terms)
-        return expr.strip()
+        terms = [
+            f"{float(weight.detach()):.4f}*x[{index}]"
+            for index, weight in enumerate(self.logits)
+            if abs(float(weight.detach())) >= 1e-6
+        ]
+        terms.append(f"{float(self.bias.detach()):.4f}")
+        return " + ".join(terms)
     
 
 class FEX(nn.Module):
@@ -80,21 +74,23 @@ class FEX(nn.Module):
         for idx, leaf in enumerate(leaf_mlps):
             leaf._debug_leaf_idx = idx
         self.leaf_mlps = nn.ModuleList(leaf_mlps)
+        self._normalize_leaf_unary_operations()
 
 
     def forward(self, x: torch.Tensor):
-        leaf_outputs = [leaf_mlp(x) for leaf_mlp in self.leaf_mlps]
-        
         def compute_node(node: Node, depth: int = 0):
             indent = "  " * depth
             tree_logger.debug(f"{indent}Entering {node.operation_type}")
 
             if node.operation_type == "leaf":
-                out = leaf_outputs[node.leaf_idx]
+                out = self.leaf_mlps[node.leaf_idx](x)
 
             elif node.operation_type == "unary":
-                child = compute_node(node.left, depth + 1)
-                out = node.operation(child)
+                if node.left.operation_type == "leaf":
+                    out = self.leaf_mlps[node.left.leaf_idx](x, unary_op=node.operation.op)
+                else:
+                    child = compute_node(node.left, depth + 1)
+                    out = node.operation(child)
 
             elif node.operation_type == "binary":
                 left_val = compute_node(node.left, depth + 1)
@@ -105,10 +101,30 @@ class FEX(nn.Module):
             return out
 
         return compute_node(self.parent_node)
+
+    def _normalize_leaf_unary_operations(self):
+        """Leaf-level affine coefficients live in LeafMLP, not UnaryOperation."""
+        def action(node: Node):
+            if (
+                node.operation_type == "unary"
+                and node.left is not None
+                and node.left.operation_type == "leaf"
+            ):
+                with torch.no_grad():
+                    node.operation.a.fill_(1.0)
+                    node.operation.b.zero_()
+                node.operation.a.requires_grad_(False)
+                node.operation.b.requires_grad_(False)
+
+        traverse(self.parent_node, action)
     
     def all_parameters(self):
-        yield from self.parameters()
-        yield from self.parent_node.get_parameters()
+        yield from (parameter for parameter in self.parameters() if parameter.requires_grad)
+        yield from (
+            parameter
+            for parameter in self.parent_node.get_parameters()
+            if parameter.requires_grad
+        )
 
     def reset(self, fex_config=None):
         if fex_config is not None and hasattr(fex_config, 'tau_start'):
@@ -119,8 +135,6 @@ class FEX(nn.Module):
         for leaf in self.leaf_mlps:
             if hasattr(leaf, 'reset_parameters'):
                 leaf.reset_parameters()
-            if hasattr(leaf, 'logits'):
-                nn.init.normal_(leaf.logits, mean=0.0, std=0.1)
             if hasattr(leaf, 'tau'):
                 leaf.tau.fill_(tau_value)
             if hasattr(leaf, 'hard'):
@@ -130,6 +144,7 @@ class FEX(nn.Module):
         def action(node: Node):
             node.reset()
         traverse(self.parent_node, action)
+        self._normalize_leaf_unary_operations()
 
     def leaf_params(self):
         """Parameters controlling leaf dimension selection (logits + sigma)."""
@@ -138,16 +153,15 @@ class FEX(nn.Module):
 
     def tree_params(self):
         """Parameters controlling tree node scalars (sign, magnitude, bias)."""
-        return list(self.parent_node.get_parameters())
+        return [
+            parameter
+            for parameter in self.parent_node.get_parameters()
+            if parameter.requires_grad
+        ]
     
     def tree_mags(self):
-        """Helper to extract 'a' parameters from tree nodes for regularization."""
-        mags = []
-        def action(node: Node):
-            if node.operation_type == "unary":
-                mags.append(node.operation.a)
-        traverse(self.parent_node, action)
-        return mags
+        """Return paper-style leaf scaling vectors for magnitude regularization."""
+        return [leaf.logits for leaf in self.leaf_mlps]
 
     def to(self, device):
         super().to(device)
@@ -201,11 +215,14 @@ class FEX(nn.Module):
     # Deep copy of FEX for saving best candidates during score computation (T1/T2)
     def copy_inorder(self):
         copied_parent = self.parent_node.copy_inorder()
+        copied_sample_indices = self.sample_indices
+        if isinstance(copied_sample_indices, torch.Tensor):
+            copied_sample_indices = copied_sample_indices.detach().clone().cpu()
         copied_fex = FEX(
             leaf_dim=self.leaf_dim,
             num_leaves=len(self.leaf_mlps),
             parent_node=copied_parent,
-            sample_indices=self.sample_indices,
+            sample_indices=copied_sample_indices,
             tree_structure=self.tree_structure,
         )
         # Copy leaf MLP parameters
@@ -215,8 +232,88 @@ class FEX(nn.Module):
 
     
     def __str__(self):
-        leaf_expressions = [str(leaf_mlp) for leaf_mlp in self.leaf_mlps]
-        return self.parent_node.__str__(leaf_expressions=leaf_expressions)
+        return self.simplified_expression()
+
+    def symbolic_expression(self, variable_names=None, digits: int = 4, threshold: float = 1e-6):
+        """Build the paper-style elementwise leaf expression with SymPy."""
+        import sympy as sp
+
+        if variable_names is None:
+            variable_names = [f"x{i + 1}" for i in range(self.leaf_dim)]
+        if len(variable_names) != self.leaf_dim:
+            raise ValueError(
+                f"Expected {self.leaf_dim} variable names, got {len(variable_names)}."
+            )
+
+        symbols = sp.symbols(" ".join(variable_names))
+        if self.leaf_dim == 1:
+            symbols = (symbols,)
+
+        def rounded_parameter(value):
+            number = round(float(value.detach().item()), digits)
+            return sp.Float(0.0 if abs(number) < threshold else number)
+
+        def apply_unary(op_name, value):
+            if op_name == "identity":
+                return value
+            if op_name == "square":
+                return value ** 2
+            if op_name == "cube":
+                return value ** 3
+            if op_name == "fourth_power":
+                return value ** 4
+            if op_name == "safe_exp":
+                return sp.exp(value)
+            if op_name == "sigmoid":
+                return 1 / (1 + sp.exp(-value))
+            if op_name == "safe_reciprocal":
+                return 1 / value
+            raise ValueError(f"Unsupported unary operator: {op_name}")
+
+        def build_leaf(leaf_idx, op_name="identity"):
+            leaf = self.leaf_mlps[leaf_idx]
+            expression = rounded_parameter(leaf.bias)
+            for coefficient, symbol in zip(leaf.logits, symbols):
+                expression += rounded_parameter(coefficient) * apply_unary(op_name, symbol)
+            return expression
+
+        def build(node):
+            if node.operation_type == "leaf":
+                return build_leaf(node.leaf_idx)
+
+            if node.operation_type == "binary":
+                left = build(node.left)
+                right = build(node.right)
+                op_name = node.operation.op.__name__
+                if op_name == "add":
+                    return left + right
+                if op_name == "sub":
+                    return left - right
+                if op_name == "mul":
+                    return left * right
+                if op_name == "safe_div":
+                    return left / right
+                raise ValueError(f"Unsupported binary operator: {op_name}")
+
+            op_name = node.operation.op.__name__
+            if node.left.operation_type == "leaf":
+                return build_leaf(node.left.leaf_idx, op_name)
+
+            child = build(node.left)
+            transformed = apply_unary(op_name, child)
+            return rounded_parameter(node.operation.a) * transformed + rounded_parameter(node.operation.b)
+
+        expanded = sp.expand(build(self.parent_node))
+        retained_terms = []
+        for term in sp.Add.make_args(expanded):
+            coefficient, _ = term.as_coeff_Mul()
+            if not coefficient.is_number or abs(float(coefficient)) >= threshold:
+                retained_terms.append(term)
+
+        return sp.simplify(sp.Add(*retained_terms))
+
+    def simplified_expression(self, variable_names=None, digits: int = 4, threshold: float = 1e-6):
+        return str(self.symbolic_expression(variable_names, digits, threshold))
     
     """ external member functions """
     def visualize_tree(self, directory: str = "fex_tree_viz", clear_directory: bool = True):

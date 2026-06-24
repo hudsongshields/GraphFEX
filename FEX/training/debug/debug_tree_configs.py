@@ -8,7 +8,7 @@ def set_mag(node, mag, sign):
         node.a.fill_(mag * sign)
 
 
-def set_hard_leaf(leaf_mlp, dim_idx: int, logit_value: float = 10.0):
+def set_hard_leaf(leaf_mlp, dim_idx: int, logit_value: float = 10000.0):
     with torch.no_grad():
         leaf_mlp.logits.fill_(-logit_value)
         leaf_mlp.logits[dim_idx] = logit_value
@@ -24,12 +24,13 @@ def build_debug_dx_forcing_fex(node_dim: int, device: str) -> FEX:
         num_leaves=forcing_config.num_leaves,
         tree_structure=forcing_config,
         init_tau=0.01,
+        epsilon_greedy=0.0
     ).to(device)
 
     with torch.no_grad():
         # term1: x_i2 + 3.2392
         set_mag(model.parent_node.left.left.operation, 1.0, 1)
-        model.parent_node.left.left.operation.b.fill_(3.2392)
+        model.parent_node.left.left.operation.b.fill_(3.24)
 
         # term2: -x_i1^3
         set_mag(model.parent_node.left.right.operation, 1.0, -1) # change to the wrong sign to test if can recover
@@ -131,6 +132,7 @@ def build_debug_interaction_fex(node_dim: int, device: str) -> FEX:
         num_leaves=inter_config.num_leaves,
         tree_structure=inter_config,
         init_tau=0.01,
+        epsilon_greedy=0.0,
     ).to(device)
 
     with torch.no_grad():

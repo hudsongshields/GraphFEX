@@ -52,14 +52,16 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     inter_fex = FEX(sample_indices=inter_dynam_op_indices, **inter_fex_kwargs).to(device)
     forcing_fex = FEX(sample_indices=forcing_op_indices, **fex_kwargs).to(device)
 
+    adjacency = adj_matrix_global.to(device)
+
     score = train_network_fex(
         forcing_fex,
         inter_fex,
         dataloader_global,
-        adj_matrix_global,
+        adjacency,
         config=fex_config_global,
         device=device,
-        verbose=verbose,
+        verbose=False,
     )
     score = score.detach().item() if isinstance(score, torch.Tensor) else float(score)
     if not math.isfinite(score):
@@ -76,7 +78,7 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     
     inter_fex = inter_fex.cpu()
     forcing_fex = forcing_fex.cpu()
-    if k_cand == 0:
+    if k_cand == -1:
         logger.info(f"Sampled candidate {k_cand} with score {score:.4f}\n self dynamics: {forcing_fex}\n inter dynamics: {inter_fex}")
     return op_indices, reward, k_cand
 
@@ -116,11 +118,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
     ).to(runtimeconfig.device)
     optimizer = torch.optim.Adam(controller.parameters(), lr=config.lr)
     controller_input = torch.zeros(config.input_dim).to(runtimeconfig.device)
-    scheduler = lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=config.num_epochs,
-        eta_min=max(1e-5, config.lr * 0.05),
-    )
+
     fex_kwargs = {
         "leaf_dim": fex_config.leaf_dim,
         "tree_structure": self_fex_struct,
@@ -161,6 +159,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
                 log_prob = torch.log(chosen_probs).sum()
                 log_probs.append(log_prob)
                 op_indices_list.append(op_indices.detach().clone().cpu())
+                train_logger.info(f"Sampled candidate {k_cand} with op indices: {op_indices.detach().clone().cpu()} and log_prob: {log_prob.item()}")
             top_epoch_cands = GraphPool(pool_size=thresh_idx)
             t1 = time.time()
             results = pool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
@@ -183,7 +182,6 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
 
             loss.backward()
             optimizer.step()
-            scheduler.step()
 
             for candidate in top_epoch_cands:
                 best_candidates.add_new(candidate)

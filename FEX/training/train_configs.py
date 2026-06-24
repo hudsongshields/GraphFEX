@@ -68,7 +68,7 @@ class FEXConfig():
     lr: float = 0.02
     inter_lr: float = 0.008
     num_epochs: int = 30
-    lr_decay: float = 0.0
+    lr_decay: bool = False
 
     bfgs_epochs: int = 15
     bfgs_lr: float = 0.8
@@ -80,6 +80,8 @@ class FEXConfig():
     # Regularization
     mag_entropy_weight: float = 0.0 
     pct_cosine_restart: float = 1.0
+
+    epsilon_greedy: float = 0.0
     
     def __post_init__(self):
         self.tau_anneal_epochs = self.num_epochs

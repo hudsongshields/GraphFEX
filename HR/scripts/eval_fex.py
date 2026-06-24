@@ -1,7 +1,6 @@
 import argparse
 import math
 import logging
-import logging
 import os
 import multiprocessing as mp
 from pathlib import Path
@@ -9,6 +8,8 @@ import time
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 from scipy.stats import ttest_ind
 from FEX.models.learnable_tree import FEX
 from FEX.training.train_fex import train_network_fex
@@ -40,7 +41,7 @@ def setup_run_dir(num_epochs, batchsize, job_id=None, mode="default") -> Path:
 
 def load_hr_data():
     adj_path = DATA_DIR / "BA_Nnodes100_Adj_deg_7_1.csv"
-    x_data_path = DATA_DIR / "HR_timeseries_SNR_40.csv"
+    x_data_path = DATA_DIR / "HR_timeseries_BA.csv"
 
     if not adj_path.exists():
         raise FileNotFoundError(f"Could not find adjacency matrix at: {adj_path}")
@@ -59,8 +60,7 @@ def load_hr_data():
     dt = 0.01
     len_run = 500
     per_run_timesteps = int(len_run / dt)
-    resolution_factor = 1
-    resolution_factor = 1
+    resolution_factor = 5
 
     num_runs = num_timesteps // per_run_timesteps
     x_chunks = torch.chunk(x_data, num_runs, dim=0)
@@ -284,7 +284,8 @@ def main():
     parser.add_argument("--num_samples", type=int, default=30)
     parser.add_argument("--top_k_viz", type=int, default=1)
     parser.add_argument("--num_epochs", type=int, default=60)
-    parser.add_argument("--mode", type=str, default="default", choices=["default", "sigmoid"])
+    parser.add_argument("--mode", type=str, default="default", choices=["default", "sigmoid", "inter_test", "top-pmf"])
+    # parser.add_argument("--lr_decay", type=float, default=0.0)
     args = parser.parse_args()
 
     run_dir = setup_run_dir(args.num_epochs, args.batch_size, job_id=args.job_id, mode=args.mode)
@@ -309,40 +310,47 @@ def main():
         lr=0.001,
         num_epochs=1,
         num_cands_per_epoch=args.num_samples,
-        percentile_threshold=1.0, # catch all candidates
+        percentile_threshold=1.0,  # catch all candidates
         num_trees=2,
         poolsize=50,
-        epsilon_greedy=1.0 # full random sample
+        epsilon_greedy=1.0,  # full random sample
     )
 
     fex_config = FEXConfig(
         num_epochs=args.num_epochs,
         bfgs_epochs=0,
-        lr=0.15,
-        inter_lr=0.05,
+        lr=0.2,
+        inter_lr=0.2,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
         num_leaves=forcing_tree_config.num_leaves,
         pct_cosine_restart=1.0,
         tau_start=4.0,
-        tau_end=0.015,
+        tau_end=0.8,
     )
 
-    # Ground-truth indices (immutable baseline for comparison)
-    ground_truth_forcing_op_indices = torch.tensor([0, 0, 0, 0, 1, 2, 0], dtype=torch.long).to(runtimeconfig.device)
-    ground_truth_inter_op_indices = torch.tensor([1, 0, 3], dtype=torch.long).to(runtimeconfig.device)
-    
+    ground_truth_forcing_op_indices = torch.tensor(
+        [0, 0, 0, 0, 1, 2, 0], dtype=torch.long, device=runtimeconfig.device
+    )
+    ground_truth_inter_op_indices = torch.tensor(
+        [1, 0, 5], dtype=torch.long, device=runtimeconfig.device
+    )
+
     save_dir = run_dir / "pre_finetune"
-    random_init_rewards = []
-    random_ground_truth_rewards = []
+    random_init_rewards: list[float] = []
+    random_ground_truth_rewards: list[float] = []
 
     if args.mode == "default":
         train_logger.info("Mode default: evaluating random controller-sampled candidates")
         _log_fex_trees(
             ground_truth_forcing_op_indices.tolist(),
             ground_truth_inter_op_indices.tolist(),
-            fex_config, save_dir, "ground_truth", train_logger,
+            fex_config,
+            save_dir,
+            "ground_truth",
+            train_logger,
         )
+
         t1 = time.time()
         best_candidates = train_network_controller(
             forcing_tree_config,
@@ -354,10 +362,11 @@ def main():
             checkpoint_dir=None,
             num_workers=args.num_workers,
         )
-        random_init_rewards = [cand.reward for cand in best_candidates]
         t2 = time.time()
         approx_time_per_cand = (t2 - t1) / args.num_samples
-        # Ground truth runs sequentially (controller already consumed workers)
+        random_init_rewards = [float(cand.reward) for cand in best_candidates]
+        random_init_rewards.sort(reverse=True)
+
         train_logger.info("Evaluating ground-truth baseline (sequential)")
         forcing_fex = FEX(
             sample_indices=ground_truth_forcing_op_indices,
@@ -374,15 +383,20 @@ def main():
             init_tau=fex_config.tau_start,
         ).to(runtimeconfig.device)
         _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
+
         t1 = time.time()
         gt_top_records: list[dict] = []
         for sample_idx in range(args.num_samples):
             score = train_network_fex(
-                forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config,
-                use_entropy=False, verbose=(sample_idx == 0),
+                forcing_fex,
+                inter_fex,
+                dataloader,
+                adj_matrix_tensor,
+                fex_config,
+                verbose=(sample_idx == 0),
             )
             reward = 1.0 / (1.0 + score)
-            random_ground_truth_rewards.append(reward)
+            random_ground_truth_rewards.append(float(reward))
 
             rec = {
                 "reward": float(reward),
@@ -398,6 +412,7 @@ def main():
             forcing_fex.reset(fex_config)
             inter_fex.reset(fex_config)
             _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
+
         t2 = time.time()
         approx_rate_single_core = (t2 - t1) / args.num_samples
 
@@ -428,26 +443,39 @@ def main():
         )
 
     else:
-        # sigmoid / inter_test 
+        # sigmoid / inter_test
         if args.mode == "sigmoid":
             train_logger.info("Mode sigmoid: baseline uses inter tree mul(identity, sigmoid)")
-            candidate_forcing_op_indices = [0, 0, 0, 0, 3, 3, 3]
-            candidate_inter_op_indices = [1, 0, 3]
-        else:  # inter_test
+            candidate_forcing_op_indices = [0, 0, 0, 0, 5, 5, 5]
+            candidate_inter_op_indices = [1, 0, 5]
+        if args.mode == "inter_test":  # inter_test
             train_logger.info("Mode inter_test: baseline uses inter tree mul(sigmoid, sigmoid)")
             candidate_forcing_op_indices = [0, 0, 0, 0, 1, 2, 0]
-            candidate_inter_op_indices = [1, 3, 3]
+            candidate_inter_op_indices = [2, 5, 4]
+        if args.mode == "top-pmf":
+            train_logger.info("Mode top-pmf: baseline uses inter tree mul(identity, top_pmf)")
+            candidate_forcing_op_indices = [0, 0, 0, 1, 0, 0, 4]
+            candidate_inter_op_indices = [1, 5, 4]
+        elif args.mode not in ["sigmoid", "inter_test", "top-pmf"]:
+            raise ValueError(f"Unsupported mode: {args.mode}")
 
         _log_fex_trees(
             candidate_forcing_op_indices,
             candidate_inter_op_indices,
-            fex_config, save_dir, args.mode, train_logger,
+            fex_config,
+            save_dir,
+            args.mode,
+            train_logger,
         )
         _log_fex_trees(
             ground_truth_forcing_op_indices.tolist(),
             ground_truth_inter_op_indices.tolist(),
-            fex_config, save_dir, "ground_truth", train_logger,
+            fex_config,
+            save_dir,
+            "ground_truth",
+            train_logger,
         )
+
         train_logger.info("Launching test and ground-truth FEX evaluations in parallel (2 cores)")
         result_q_test = mp.Queue()
         result_q_gt = mp.Queue()
@@ -485,21 +513,26 @@ def main():
                 args.top_k_viz,
             ),
         )
+
         t1 = time.time()
         p_test.start()
         p_gt.start()
         p_test.join()
         p_gt.join()
         t2 = time.time()
+
         if p_test.exitcode != 0:
             raise RuntimeError(f"Test FEX worker exited with code {p_test.exitcode}")
         if p_gt.exitcode != 0:
             raise RuntimeError(f"Ground-truth FEX worker exited with code {p_gt.exitcode}")
-        random_init_rewards = result_q_test.get()
-        random_ground_truth_rewards = result_q_gt.get()
+
+        random_init_rewards = [float(r) for r in result_q_test.get()]
+        random_ground_truth_rewards = [float(r) for r in result_q_gt.get()]
         random_init_rewards.sort(reverse=True)
+
         approx_time_per_cand = (t2 - t1) / args.num_samples
-        approx_rate_single_core = approx_time_per_cand  # both ran simultaneously
+        approx_rate_single_core = approx_time_per_cand  # both branches ran simultaneously
+
     random_init_rewards_np = np.asarray(random_init_rewards, dtype=np.float64)
     random_ground_truth_rewards_np = np.asarray(random_ground_truth_rewards, dtype=np.float64)
     t_stat, p_value = independent_t_test_greater(random_ground_truth_rewards_np, random_init_rewards_np)
@@ -513,6 +546,7 @@ def main():
         "default": "random_sequence",
         "sigmoid": "sigmoid_sequence",
         "inter_test": "sigmoid_mul_sigmoid_sequence",
+        "top-pmf": "top_pmf_sequence",
     }
     baseline_name = baseline_name_map[args.mode]
     test_lines = [
@@ -532,25 +566,61 @@ def main():
 
     random_ground_truth_rewards.sort(reverse=True)
 
-    import matplotlib.pyplot as plt
-    plt.figure()
-    plt.subplots_adjust(bottom=0.20)
-    plt.plot(random_init_rewards)
-    plt.plot(random_ground_truth_rewards)
-    plt.xlabel("Candidate Index")
-    plt.ylabel("Reward")
-    plt.title("Rewards of Candidate Random Sample")
     name_map = {
         "default": "Random",
         "sigmoid": "Sigmoid",
         "inter_test": "Sigmoid-Mul-Sigmoid",
+        "top-pmf": "Top-PMF",
     }
     name = name_map[args.mode]
-    plt.legend([f"Average Reward ({name} Sequences): {np.mean(random_init_rewards):.4f}", f"Average Reward (Ground Truth): {np.mean(random_ground_truth_rewards):.4f}"])
-    plt.figtext(0.02, 0.08, f"Independent t-test (one-sided) p={p_value:.3g}", ha="left", fontsize=9)
-    plt.figtext(0.02, 0.12, f"time per cand (2 cores): {approx_time_per_cand:.2f} seconds", ha="left", fontsize=9)
-    plt.figtext(0.02, 0.16, f"approx time per cand (single core): {approx_rate_single_core:.2f} seconds", ha="left", fontsize=9)
-    plt.savefig(save_dir / "random_sample_rewards.png")
+    df = pd.concat(
+        [
+            pd.DataFrame({
+                "distribution": f"{name} Sequences Mean: {np.mean(random_init_rewards):.4f}",
+                "reward": random_init_rewards,
+            }),
+            pd.DataFrame({
+                "distribution": f"Ground Truth Mean: {np.mean(random_ground_truth_rewards):.4f}",
+                "reward": random_ground_truth_rewards,
+            }),
+        ],
+        ignore_index=True,
+    )
+
+    plt.style.use("dark_background")
+    fig, ax = plt.subplots(figsize=(9, 6))
+
+    sns.histplot(
+        data=df,
+        x="reward",
+        hue="distribution",
+        bins=100,
+        stat="count",
+        common_norm=False,
+        element="step",
+        alpha=0.4,
+        palette="viridis",
+        ax=ax,
+    )
+    ax.set_title(f"Reward Distribution: {name} vs. Ground Truth")
+    ax.set_xlabel("Reward")
+    ax.set_ylabel("Count")
+
+    ax.text(
+        0.02,
+        0.98,
+        (
+            f"One-sided independent t-test: p={p_value:.3g}\n"
+        ),
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9,
+    )
+
+    fig.tight_layout()
+    fig.savefig(save_dir / "random_sample_rewards.png", dpi=300)
+    plt.close(fig)
 
 
 if __name__ == "__main__":

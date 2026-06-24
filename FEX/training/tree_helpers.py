@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..models.nodes import Node
-from graphviz import Digraph
 import torch.nn.functional as F
 import torch
 import torch.nn as nn
@@ -17,6 +16,12 @@ def traverse(node, action):
         traverse(node.left, action)
     if node.right is not None:
         traverse(node.right, action)
+
+
+def copy_fex_state_(target, source) -> None:
+    """Copy a trained FEX state into an existing FEX object in-place."""
+    target.load_state_dict(source.state_dict(), strict=False)
+    target.to(next(source.parameters()).device)
 
 
 """ Debugging Helpers for FEX """
@@ -75,6 +80,7 @@ def fex_load_state_dict(fex, checkpoint, strict=True):
         fex.tree_structure = get_tree_config(tree_name)
         fex.sample_indices = sample_indices
         fex.parent_node = fex.tree_structure.build_tree(sample_indices)
+        fex._normalize_leaf_unary_operations()
 
     tree_state = {k: v for k, v in state.items() if k.startswith("tree.")}
     module_state = {k: v for k, v in state.items() if not k.startswith("tree.")}
@@ -88,6 +94,7 @@ def fex_load_state_dict(fex, checkpoint, strict=True):
                 node_load_state_dict(fex.parent_node, tree_state, prefix="tree.")
         else:
             node_load_state_dict(fex.parent_node, tree_state, prefix="tree.")
+        fex._normalize_leaf_unary_operations()
 
     return result
 
@@ -141,6 +148,8 @@ def load_state_dict(target, *args, **kwargs):
 
 """ Tree Visualization Helpers"""
 def visualize_tree_inorder(node, filename=None, format="png", leaf_transforms=None):
+    from graphviz import Digraph
+
     dot = Digraph()
     
     def safe_op_name(op):

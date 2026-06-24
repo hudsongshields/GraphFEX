@@ -2,7 +2,7 @@ import argparse
 import os
 import multiprocessing as mp
 from pathlib import Path
-from random import random
+import random
 
 import numpy as np
 import pandas as pd
@@ -26,67 +26,34 @@ def setup_run_dir() -> Path:
     (run_dir / "pre_finetune").mkdir(parents=True, exist_ok=True)
     return run_dir
 
-
-def load_hr_data():
-    adj_path = DATA_DIR / "BA_Nnodes100_Adj_deg_7_1.csv"
-    x_data_path = DATA_DIR / "HR_timeseries_SNR_40.csv"
-
-    if not adj_path.exists():
-        raise FileNotFoundError(f"Could not find adjacency matrix at: {adj_path}")
-    if not x_data_path.exists():
-        raise FileNotFoundError(f"Could not find timeseries data at: {x_data_path}")
-
-    adj_matrix = pd.read_csv(adj_path, header=None)
-    num_graph_nodes = adj_matrix.shape[0]
-
-    x_df = pd.read_csv(x_data_path, header=None)
-    num_timesteps, _ = x_df.shape
-
-    x_np = x_df.to_numpy(dtype=np.float32)
-    x_data = torch.from_numpy(x_np.reshape(num_timesteps, num_graph_nodes, 3))
-
-    dt = 0.01
-    len_run = 500
-    per_run_timesteps = int(len_run / dt)
-    resolution_factor = 4
-
-    num_runs = num_timesteps // per_run_timesteps
-    x_chunks = torch.chunk(x_data, num_runs, dim=0)
-
-    all_x = []
-    all_dx_dt = []
-
-    for x_run in x_chunks:
-        x_run = x_run[::resolution_factor]
-        new_dt = dt * resolution_factor
-        dx_dt = NumericalDeriv(x_run, dt=new_dt)
-        x_run = x_run[2:-2]
-
-        all_x.append(x_run)
-        all_dx_dt.append(dx_dt)
-
-    all_x = all_x[:]
-    all_dx_dt = all_dx_dt[:]
-
-    x_data = torch.cat(all_x, dim=0)
-    dx_dt = torch.cat(all_dx_dt, dim=0)
-
-    print(f"num runs: {num_runs}, timesteps per run: {per_run_timesteps}, total timesteps: {x_data.shape[0]}")
-    adj_matrix_tensor = torch.tensor(adj_matrix.values, dtype=torch.float32)
-
-    return x_data, dx_dt, adj_matrix_tensor
+def make_adjacency(num_nodes: int, probability: float, device) -> torch.Tensor:
+    adjacency = (torch.rand(num_nodes, num_nodes) < probability).float()
+    adjacency.fill_diagonal_(0.0)
+    for node in range(num_nodes):
+        if adjacency[node].sum() == 0:
+            adjacency[node, (node + 1) % num_nodes] = 1.0
+    return adjacency.to('cpu')
 
 
-def make_dataloader(x_data, dx_dt):
-    dataset = TensorDataset(x_data, dx_dt)
+def make_data(num_samples: int, adjacency: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    device = adjacency.device
+    num_nodes = adjacency.size(0)
+    states = torch.empty(num_samples, num_nodes, 3, device=device)
+    states[..., 0].uniform_(-2.0, 2.0)
+    states[..., 1].uniform_(-8.0, 4.0)
+    states[..., 2].uniform_(0.0, 5.0)
 
-    pin_memory = torch.cuda.is_available()
-    return DataLoader(
-        dataset,
-        batch_size=128,
-        shuffle=True,
-        pin_memory=pin_memory,
-    )
+    x_i = states[..., 0]
+    y_i = states[..., 1]
+    z_i = states[..., 2]
+    self_dynamics = y_i - x_i.pow(3) + 3.0 * x_i.pow(2) - z_i + 3.24
+    pairwise = 0.15 * (2.0 - x_i).unsqueeze(2) * torch.sigmoid(x_i).unsqueeze(1)
+    dx = self_dynamics + (pairwise * adjacency.unsqueeze(0)).sum(dim=2)
+
+    derivatives = torch.zeros_like(states)
+    derivatives[..., 0] = dx
+    return states.to(device), derivatives.to(device)
+
 
 def seed_everything(seed=42):
     random.seed(seed)
@@ -101,6 +68,9 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_workers", type=int, default=None)
+    parser.add_argument("--nodes", type=int, default=100)
+    parser.add_argument("--samples", type=int, default=1000)
+    parser.add_argument("--batch_size", type=int, default=256)
     args = parser.parse_args()
 
     run_dir = setup_run_dir()
@@ -111,13 +81,19 @@ def main():
     forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
     inter_tree_config = get_tree_config("depth_2_tree_config")
 
-    x_data, dx_dt, adj_matrix_tensor = load_hr_data()
-    dataloader = make_dataloader(x_data, dx_dt)
+    adjacency = make_adjacency(args.nodes, probability=0.35, device=runtimeconfig.device)
+    states, derivatives = make_data(args.samples, adjacency)
+    dataloader = DataLoader(
+        TensorDataset(states, derivatives),
+        batch_size=args.batch_size,
+        shuffle=True,
+        pin_memory=runtimeconfig.device == "cuda",
+    )
 
     controller_config = ControllerConfig(
         input_dim=20,
         hidden_dim=64,
-        lr=0.05,
+        lr=0.001,
         num_epochs=200,
         num_cands_per_epoch=10,
         percentile_threshold=0.2,
@@ -126,17 +102,17 @@ def main():
     )
 
     fex_config = FEXConfig(
-        num_epochs=100,
-        bfgs_epochs=0,
-        lr=0.05,
-        inter_lr=0.02,
+        num_epochs=60,
+        bfgs_epochs=40,
+        lr=0.2,
+        inter_lr=0.2,
         bfgs_lr=0.1,
-        leaf_dim=x_data.shape[2],
+        leaf_dim=states.shape[2],
         num_leaves=forcing_tree_config.num_leaves,
         mag_entropy_weight=0,
         pct_cosine_restart=1.0,
-        tau_start=4.0,
-        tau_end=0.015,
+        tau_start=1.0,
+        tau_end=1.0,
     )
 
     save_dir = run_dir / "pre_finetune"
@@ -144,7 +120,7 @@ def main():
         forcing_tree_config,
         inter_tree_config,
         dataloader,
-        adj_matrix_tensor,
+        adjacency,
         controller_config,
         fex_config,
         checkpoint_dir=save_dir,

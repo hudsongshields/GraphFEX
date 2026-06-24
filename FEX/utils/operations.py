@@ -54,15 +54,15 @@ UNARY_OPS = [
     identity,
     square,
     cube,
-    #fourth_power,
-    #safe_exp,
+    fourth_power,
+    safe_exp,
     sigmoid,
-    #safe_reciprocal,
+    safe_reciprocal,
 ]
 
 BINARY_OPS = [
     add,
     mul,
     sub,
-    #safe_div,
+    safe_div,
 ]
