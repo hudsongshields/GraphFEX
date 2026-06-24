@@ -13,6 +13,7 @@ from FEX.training.train_configs import FEXConfig, runtimeconfig
 from FEX.training.train_controller import ControllerConfig, train_network_controller
 from FEX.utils.numerical_deriv import NumericalDeriv
 from FEX.utils.tree_configs import get_tree_config
+from HR.data.generate_data import make_adjacency, make_data
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -25,35 +26,6 @@ def setup_run_dir() -> Path:
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "pre_finetune").mkdir(parents=True, exist_ok=True)
     return run_dir
-
-def make_adjacency(num_nodes: int, probability: float, device) -> torch.Tensor:
-    adjacency = (torch.rand(num_nodes, num_nodes) < probability).float()
-    adjacency.fill_diagonal_(0.0)
-    for node in range(num_nodes):
-        if adjacency[node].sum() == 0:
-            adjacency[node, (node + 1) % num_nodes] = 1.0
-    return adjacency.to('cpu')
-
-
-def make_data(num_samples: int, adjacency: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    device = adjacency.device
-    num_nodes = adjacency.size(0)
-    states = torch.empty(num_samples, num_nodes, 3, device=device)
-    states[..., 0].uniform_(-2.0, 2.0)
-    states[..., 1].uniform_(-8.0, 4.0)
-    states[..., 2].uniform_(0.0, 5.0)
-
-    x_i = states[..., 0]
-    y_i = states[..., 1]
-    z_i = states[..., 2]
-    self_dynamics = y_i - x_i.pow(3) + 3.0 * x_i.pow(2) - z_i + 3.24
-    pairwise = 0.15 * (2.0 - x_i).unsqueeze(2) * torch.sigmoid(x_i).unsqueeze(1)
-    dx = self_dynamics + (pairwise * adjacency.unsqueeze(0)).sum(dim=2)
-
-    derivatives = torch.zeros_like(states)
-    derivatives[..., 0] = dx
-    return states.to(device), derivatives.to(device)
-
 
 def seed_everything(seed=42):
     random.seed(seed)
@@ -102,7 +74,7 @@ def main():
     )
 
     fex_config = FEXConfig(
-        num_epochs=60,
+        num_epochs=80,
         bfgs_epochs=40,
         lr=0.2,
         inter_lr=0.2,

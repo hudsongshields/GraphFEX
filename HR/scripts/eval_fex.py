@@ -21,6 +21,7 @@ from FEX.training.train_controller import ControllerConfig, train_network_contro
 from FEX.utils.numerical_deriv import NumericalDeriv
 from FEX.utils.tree_configs import get_tree_config
 from FEX.utils.operations import UNARY_OPS, BINARY_OPS
+from HR.data.generate_data import make_adjacency, make_data
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -39,54 +40,6 @@ def setup_run_dir(num_epochs, batchsize, job_id=None, mode="default") -> Path:
     return run_dir
 
 
-def load_hr_data():
-    adj_path = DATA_DIR / "BA_Nnodes100_Adj_deg_7_1.csv"
-    x_data_path = DATA_DIR / "HR_timeseries_BA.csv"
-
-    if not adj_path.exists():
-        raise FileNotFoundError(f"Could not find adjacency matrix at: {adj_path}")
-    if not x_data_path.exists():
-        raise FileNotFoundError(f"Could not find timeseries data at: {x_data_path}")
-
-    adj_matrix = pd.read_csv(adj_path, header=None)
-    num_graph_nodes = adj_matrix.shape[0]
-
-    x_df = pd.read_csv(x_data_path, header=None)
-    num_timesteps, _ = x_df.shape
-
-    x_np = x_df.to_numpy(dtype=np.float32)
-    x_data = torch.from_numpy(x_np.reshape(num_timesteps, num_graph_nodes, 3))
-
-    dt = 0.01
-    len_run = 500
-    per_run_timesteps = int(len_run / dt)
-    resolution_factor = 5
-
-    num_runs = num_timesteps // per_run_timesteps
-    x_chunks = torch.chunk(x_data, num_runs, dim=0)
-
-    all_x = []
-    all_dx_dt = []
-
-    for x_run in x_chunks:
-        x_run = x_run[::resolution_factor]
-        new_dt = dt * resolution_factor
-        dx_dt = NumericalDeriv(x_run, dt=new_dt)
-        x_run = x_run[2:-2]
-
-        all_x.append(x_run)
-        all_dx_dt.append(dx_dt)
-
-    all_x = all_x[:]
-    all_dx_dt = all_dx_dt[:]
-
-    x_data = torch.cat(all_x, dim=0)
-    dx_dt = torch.cat(all_dx_dt, dim=0)
-
-    print(f"num runs: {num_runs}, timesteps per run: {per_run_timesteps}, total timesteps: {x_data.shape[0]}")
-    adj_matrix_tensor = torch.tensor(adj_matrix.values, dtype=torch.float32)
-
-    return x_data, dx_dt, adj_matrix_tensor
 
 
 def make_dataloader(x_data, dx_dt, batch_size=256):
@@ -144,7 +97,6 @@ def _log_fex_trees(
         tree_structure=inter_tree_config,
         init_tau=fex_config.tau_start,
     ).to(device)
-    _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
 
     logger.info(f"[{label}] forcing tree: {str(forcing_fex)}")
     logger.info(f"[{label}] inter tree:   {str(inter_fex)}")
@@ -158,15 +110,6 @@ def _log_fex_trees(
     except Exception as e:
         logger.warning(f"[{label}] graphviz render failed: {e}")
 
-
-def _apply_inter_leaf_masks(inter_fex: FEX, node_dim: int) -> None:
-    """Match train_fex masking: leaf0 uses self dims, leaf1 uses neighbor dims."""
-    if len(inter_fex.leaf_mlps) < 2:
-        return
-    with torch.no_grad():
-        if hasattr(inter_fex.leaf_mlps[0], "logit_mask"):
-            inter_fex.leaf_mlps[0].logit_mask[node_dim:].fill_(-1e9)
-            inter_fex.leaf_mlps[1].logit_mask[:node_dim].fill_(-1e9)
 
 
 def _save_top_candidate_visualizations(
@@ -244,7 +187,6 @@ def _run_fex_samples(
         tree_structure=inter_tree_config,
         init_tau=fex_config.tau_start,
     ).to(device)
-    _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
 
     rewards = []
     top_records: list[dict] = []
@@ -268,7 +210,6 @@ def _run_fex_samples(
 
         forcing_fex.reset(fex_config)
         inter_fex.reset(fex_config)
-        _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
 
     _save_top_candidate_visualizations(top_records, save_dir=save_dir, label=label, logger=runtimeconfig.train_logger)
 
@@ -284,6 +225,7 @@ def main():
     parser.add_argument("--num_samples", type=int, default=30)
     parser.add_argument("--top_k_viz", type=int, default=1)
     parser.add_argument("--num_epochs", type=int, default=60)
+    parser.add_argument("--bfgs_epochs", type=int, default=40)
     parser.add_argument("--mode", type=str, default="default", choices=["default", "sigmoid", "inter_test", "top-pmf"])
     # parser.add_argument("--lr_decay", type=float, default=0.0)
     args = parser.parse_args()
@@ -301,7 +243,8 @@ def main():
     forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
     inter_tree_config = get_tree_config("depth_2_tree_config")
 
-    x_data, dx_dt, adj_matrix_tensor = load_hr_data()
+    adj_matrix_tensor = make_adjacency(num_nodes=100, probability=0.35, device=runtimeconfig.device)
+    x_data, dx_dt = make_data(num_samples=2048, adjacency=adj_matrix_tensor)
     dataloader = make_dataloader(x_data, dx_dt, args.batch_size)
 
     controller_config = ControllerConfig(
@@ -318,15 +261,15 @@ def main():
 
     fex_config = FEXConfig(
         num_epochs=args.num_epochs,
-        bfgs_epochs=0,
+        bfgs_epochs=args.bfgs_epochs,
         lr=0.2,
         inter_lr=0.2,
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
         num_leaves=forcing_tree_config.num_leaves,
         pct_cosine_restart=1.0,
-        tau_start=4.0,
-        tau_end=0.8,
+        tau_start=1.0,
+        tau_end=1.0,
     )
 
     ground_truth_forcing_op_indices = torch.tensor(
@@ -382,7 +325,6 @@ def main():
             tree_structure=inter_tree_config,
             init_tau=fex_config.tau_start,
         ).to(runtimeconfig.device)
-        _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
 
         t1 = time.time()
         gt_top_records: list[dict] = []
@@ -411,7 +353,6 @@ def main():
 
             forcing_fex.reset(fex_config)
             inter_fex.reset(fex_config)
-            _apply_inter_leaf_masks(inter_fex, fex_config.leaf_dim)
 
         t2 = time.time()
         approx_rate_single_core = (t2 - t1) / args.num_samples
