@@ -6,20 +6,8 @@ from .train_configs import FEXConfig, runtimeconfig
 import torch
 import torch.nn.functional as F
 import math
-from .loss_funcs import group_loss, mag_reverse_l2_regularization, total_loss
+from .loss_funcs import total_loss
 from .tree_helpers import copy_fex_state_, get_noise_stds
-
-def leaf_logit_closeness(fex: FEX):
-    """Return logit spread (variance around mean) per leaf."""
-    total = torch.tensor(0.0, device=next(fex.parameters()).device)
-    for leaf in fex.leaf_mlps:
-        logits = leaf.logits
-        if logits.numel() <= 1:
-            continue
-        centered = logits - logits.mean()
-        total = total + (centered ** 2).mean()
-    return total
-
 
 def train_network_fex(
     forcing_tree: FEX,
@@ -38,7 +26,7 @@ def train_network_fex(
 
 
     adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr, betas=(0.95, 0.999))
-    adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr) #, betas=(0.95, 0.999))
+    adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr)
 
     lr_decay = config.lr_decay
     if lr_decay > 0:
@@ -73,53 +61,11 @@ def train_network_fex(
 
     inter_dynam_tree.train()
     forcing_tree.train()
-    tau_schedule = getattr(config, "tau_schedule", "exponential")
-    tau_max = float(config.tau_start)
-    tau_min = float(config.tau_end)
-    tau_horizon = max(float(config.tau_anneal_epochs) - 1.0, 1.0)
-
-    tau_decay_rate = None
-    if (
-        tau_schedule == "exponential"
-        and tau_max > 0.0
-        and tau_min > 0.0
-        and tau_max != tau_min
-    ):
-        tau_decay_rate = math.log(tau_max / tau_min) / tau_horizon
-
     for epoch in range(config.num_epochs):
-        if tau_schedule == "non_decay":
-            current_tau = tau_max
-        elif tau_schedule == "linear":
-            progress = min(float(epoch) / tau_horizon, 1.0)
-            current_tau = tau_max + (tau_min - tau_max) * progress
-        elif tau_decay_rate is not None:
-            if tau_max > tau_min:
-                current_tau = max(tau_min, tau_max * math.exp(-tau_decay_rate * float(epoch)))
-            else:
-                current_tau = min(tau_min, tau_max * math.exp(-tau_decay_rate * float(epoch)))
-        else:
-            current_tau = tau_max
-        
-        if hasattr(forcing_tree, "set_leaf_tau"):
-            forcing_tree.set_leaf_tau(current_tau)
-        if hasattr(inter_dynam_tree, "set_leaf_tau"):
-            inter_dynam_tree.set_leaf_tau(current_tau)
-
-        
-        if epoch == int(config.set_hard_at_epoch):
-            if hasattr(forcing_tree, "set_leaf_hard"):
-                forcing_tree.set_leaf_hard(True)
-            if hasattr(inter_dynam_tree, "set_leaf_hard"):
-                inter_dynam_tree.set_leaf_hard(True)
-        
-        forcing_tree.train()
-        inter_dynam_tree.train()
-
         epoch_pred_loss = 0.0
         num_batches = 0
         for batch_x, batch_dy_val in dataloader:
-            batch_dy_val = batch_dy_val[:, :, 0:1]  # only learn first dim of dx/dt
+            batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim+1]
             if device == 'cpu':
                 batch_x = batch_x.to(device)
                 batch_dy_val = batch_dy_val.to(device)
@@ -130,29 +76,9 @@ def train_network_fex(
             adam_optim_self.zero_grad()
             adam_optim_inter.zero_grad()
 
-            # main mse loss
-            if config.num_groups == 1:
-                pred_batch_loss = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
-                batch_loss = pred_batch_loss
-                epoch_pred_loss += pred_batch_loss.detach().item()
-
-            # Sign-controlled leaf regularizer:
-            use_entropy = config.leaf_entropy_weight != 0
-            if use_entropy:
-                if config.decay_entropy_until > 0.0:
-                    entropy_warmup = config.num_epochs * config.decay_entropy_until
-                    entropy_weight = max(0.0, 1.0 - epoch / max(entropy_warmup, 1)) * config.leaf_entropy_weight
-                    if entropy_weight != 0:
-                        logit_spread = leaf_logit_closeness(forcing_tree) + leaf_logit_closeness(inter_dynam_tree)
-                        batch_loss = batch_loss - entropy_weight * logit_spread
-                else:
-                    logit_spread = leaf_logit_closeness(forcing_tree) + leaf_logit_closeness(inter_dynam_tree)
-                    batch_loss = batch_loss - config.leaf_entropy_weight * logit_spread
-
-            # Reverse L2 - encourage non-trivial solutions (inter tree only)
-            if (mag_entropy_weight := config.mag_entropy_weight) > 0:
-                mag_entropy = mag_reverse_l2_regularization(inter_dynam_tree)
-                batch_loss = batch_loss + mag_entropy_weight * mag_entropy
+            pred_batch_loss = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
+            batch_loss = pred_batch_loss
+            epoch_pred_loss += pred_batch_loss.detach().item()
 
             batch_loss.backward()
             adam_optim_self.step()
@@ -172,7 +98,7 @@ def train_network_fex(
             best_inter_tree = inter_dynam_tree.copy_inorder()
 
         if train_logger:
-            train_logger.debug(f"Epoch {epoch+1}/{config.num_epochs}, Tau: {current_tau:.4f}")
+            train_logger.debug(f"Epoch {epoch+1}/{config.num_epochs}")
             train_logger.info(f"Adam Epoch {epoch+1}/{config.num_epochs}, PredLoss: {mean_epoch_pred_loss:.4f}")
             train_logger.debug(f'Equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}')
         if log_every > 0 and (
@@ -186,7 +112,6 @@ def train_network_fex(
                 f"Adam epoch {epoch + 1:>5}/{config.num_epochs}: "
                 f"pred_loss={mean_epoch_pred_loss:.8e}, "
                 f"self_lr={self_lr:.4g}, inter_lr={inter_lr:.4g}, "
-                f"tau={current_tau:.4g}"
             )
     
     if config.bfgs_epochs > 0:
@@ -203,7 +128,7 @@ def train_network_fex(
         # Prebuild train set for LBFGS closure
         bfgs_batches = []
         for batch_x, batch_dy_val in dataloader:
-            batch_dy_val = batch_dy_val[:, :, 0:1]
+            batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim+1]
 
             if device == 'cuda':
                 batch_x = batch_x.to(device, non_blocking=True)
@@ -221,9 +146,7 @@ def train_network_fex(
             total_pred_error = 0.0
             for batch_x, batch_dy_val in bfgs_batches:
                 pred_error = total_loss(batch_x, batch_dy_val, bfgs_forcing_tree, bfgs_inter_tree, nodes, edges, scatter_idx)
-                entropy_error = -config.leaf_entropy_weight * (leaf_logit_closeness(bfgs_forcing_tree) + leaf_logit_closeness(bfgs_inter_tree))
-                entropy_error += config.mag_entropy_weight * mag_reverse_l2_regularization(bfgs_inter_tree)
-                accumulated_loss = accumulated_loss + pred_error + entropy_error
+                accumulated_loss = accumulated_loss + pred_error
                 total_pred_error = total_pred_error + pred_error.detach().item()
 
             accumulated_loss.backward()
@@ -273,6 +196,70 @@ def train_network_fex(
         copy_fex_state_(inter_dynam_tree, best_inter_tree)
 
     return float(best_epoch_loss)
+
+def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.device, verbose=False):
+    forcing_tree = forcing_tree.to(device)
+    forcing_tree_params = forcing_tree.parameters()
+    optim = torch.optim.Adam(forcing_tree_params, lr=config.lr)
+
+    train_logger = runtimeconfig.train_logger if verbose else None
+
+    for epoch in range(config.num_epochs):
+        epoch_loss = 0.0
+        num_batches = 0
+        for batch_x, batch_dy_val in dataloader:
+            batch_x = batch_x.to(device)
+            batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim+1].to(device)
+
+            optim.zero_grad()
+            loss = total_loss(batch_x, batch_dy_val, forcing_tree)
+            loss.backward()
+            optim.step()
+
+            epoch_loss += loss.item()
+            num_batches += 1
+            
+        if train_logger is not None:
+            train_logger.info(f"Processing batch with shape {batch_x.shape}, target shape {batch_dy_val.shape}")
+            train_logger.info(f"Epoch {epoch}, Loss: {epoch_loss/num_batches:.4f}")
+    
+    if config.bfgs_epochs > 0:
+        bfgs_batches = list(dataloader)
+        forcing_tree_params = forcing_tree.parameters()
+        bfgs_optim = torch.optim.LBFGS(forcing_tree_params, lr=config.lr, max_iter=config.bfgs_epochs)
+        def closure():
+            bfgs_optim.zero_grad()
+            accumulated_loss = 0.0
+            for batch_x, batch_dy_val in bfgs_batches:
+                batch_x = batch_x.to(device)
+                batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim+1].to(device)
+                loss = total_loss(batch_x, batch_dy_val, forcing_tree)
+                loss.backward()
+                accumulated_loss += loss.item()
+            return accumulated_loss / len(bfgs_batches)
+        
+        bfgs_optim.step(closure)
+
+    forcing_tree.eval()
+
+    final_pred_losses = []
+    with torch.no_grad():
+        for batch_x, batch_dy_val in dataloader:
+            batch_x = batch_x.to(device)
+            batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim + 1].to(device)
+
+            loss = total_loss(
+                batch_x,
+                batch_dy_val,
+                forcing_tree,
+            )
+
+            final_pred_losses.append(loss.item())
+
+    forcing_tree.train()
+
+    return sum(final_pred_losses) / max(len(final_pred_losses), 1)
+        
 
 
 if __name__ == "__main__":

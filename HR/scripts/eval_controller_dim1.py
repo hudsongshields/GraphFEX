@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from FEX.training.train_configs import FEXConfig, runtimeconfig
-from FEX.training.train_controller import ControllerConfig, train_network_controller
+from FEX.training.train_controller import ControllerConfig, train_controller
 from FEX.utils.numerical_deriv import NumericalDeriv
 from FEX.utils.tree_configs import get_tree_config
 from HR.data.generate_data import make_adjacency, make_data
@@ -22,7 +22,7 @@ DATA_DIR = HR_DIR / "data"
 
 def setup_run_dir() -> Path:
     job_id = os.environ.get("SLURM_JOB_ID", "local")
-    run_dir = HR_DIR / "sigmoid_eval" / f"run_{job_id}"
+    run_dir = HR_DIR / "dim1_controller" / f"run_{job_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "pre_finetune").mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -52,8 +52,7 @@ def main():
     log_path = run_dir / "controller_eval.log"
     runtimeconfig.CreateLogger(str(log_path), name="train_logger")
 
-    forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
-    inter_tree_config = get_tree_config("depth_2_tree_config")
+    forcing_tree_config = get_tree_config("depth_2_tree_config")
 
     adjacency = make_adjacency(args.nodes, probability=0.35, device=runtimeconfig.device)
     states, derivatives = make_data(args.samples, adjacency)
@@ -68,7 +67,7 @@ def main():
         input_dim=20,
         hidden_dim=64,
         lr=0.001,
-        num_epochs=500,
+        num_epochs=1000,
         num_cands_per_epoch=10,
         percentile_threshold=0.4,
         num_trees=2,
@@ -76,25 +75,20 @@ def main():
     )
 
     fex_config = FEXConfig(
-        num_epochs=120,
+        num_epochs=60,
         bfgs_epochs=20,
         lr=0.2,
-        inter_lr=0.2,
         bfgs_lr=0.1,
         leaf_dim=states.shape[2],
         num_leaves=forcing_tree_config.num_leaves,
-        mag_entropy_weight=0,
-        pct_cosine_restart=1.0,
-        tau_start=1.0,
-        tau_end=1.0,
+
+        target_dim=1,
     )
 
     save_dir = run_dir / "pre_finetune"
-    best_candidates = train_network_controller(
+    best_candidates = train_controller(
         forcing_tree_config,
-        inter_tree_config,
         dataloader,
-        adjacency,
         controller_config,
         fex_config,
         checkpoint_dir=save_dir,

@@ -23,6 +23,11 @@ def make_data(num_samples: int, adjacency: torch.Tensor) -> tuple[torch.Tensor, 
     pairwise = 0.15 * (2.0 - x_i).unsqueeze(2) * torch.sigmoid(x_i).unsqueeze(1)
     dx = self_dynamics + (pairwise * adjacency.unsqueeze(0)).sum(dim=2)
 
+    dy = 1 - 5 * x_i.pow(2) - y_i
+    dz = 0.004 * (4 * (x_i + 1.6) - z_i)
+
     derivatives = torch.zeros_like(states)
     derivatives[..., 0] = dx
+    derivatives[..., 1] = dy
+    derivatives[..., 2] = dz
     return states.cpu(), derivatives.cpu()

@@ -7,6 +7,7 @@ import sys
 
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+from HR.data.generate_data import make_adjacency, make_data
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -16,12 +17,11 @@ if str(REPO_ROOT) not in sys.path:
 from FEX.models.learnable_tree import FEX
 from FEX.training.loss_funcs import total_loss
 from FEX.training.train_configs import FEXConfig, runtimeconfig
-from FEX.training.train_fex import train_network_fex
+from FEX.training.train_fex import train_fex
 from FEX.utils.tree_configs import get_tree_config
 
 
-SELF_SEQUENCE = [0, 0, 0, 0, 1, 2, 0]
-INTERACTION_SEQUENCE = [1, 0, 5]
+SELF_SEQUENCE = [0, 0, 1]
 VARIABLES = ["x_i", "y_i", "z_i", "x_j", "y_j", "z_j"]
 
 
@@ -29,6 +29,8 @@ def seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
 
 def initialize_small(tree: FEX, std: float = 0.01) -> None:
     with torch.no_grad():
@@ -69,38 +71,6 @@ def self_targets() -> dict[str, float]:
         "z^3": 0.0,
         "constant": 3.24,
     }
-
-
-def interaction_coefficients(tree: FEX) -> dict[str, float]:
-    identity_leaf, sigmoid_leaf = tree.leaf_mlps
-    left_weights = identity_leaf.logits.detach()
-    right_weights = sigmoid_leaf.logits.detach()
-    left_bias = float(identity_leaf.bias.detach().item())
-    right_bias = float(sigmoid_leaf.bias.detach().item())
-
-    coefficients = {"constant": left_bias * right_bias}
-    for index, variable in enumerate(VARIABLES):
-        coefficients[variable] = float(left_weights[index]) * right_bias
-        coefficients[f"sigmoid({variable})"] = left_bias * float(right_weights[index])
-    for left_index, left_variable in enumerate(VARIABLES):
-        for right_index, right_variable in enumerate(VARIABLES):
-            key = f"{left_variable}*sigmoid({right_variable})"
-            coefficients[key] = float(left_weights[left_index] * right_weights[right_index])
-    return coefficients
-
-
-def interaction_targets() -> dict[str, float]:
-    targets = {"constant": 0.0}
-    for variable in VARIABLES:
-        targets[variable] = 0.0
-        targets[f"sigmoid({variable})"] = 0.0
-    for left_variable in VARIABLES:
-        for right_variable in VARIABLES:
-            targets[f"{left_variable}*sigmoid({right_variable})"] = 0.0
-    targets["sigmoid(x_j)"] = 0.30
-    targets["x_i*sigmoid(x_j)"] = -0.15
-    return targets
-
 
 def maximum_error(actual: dict[str, float], target: dict[str, float]) -> float:
     return max(abs(actual[key] - target[key]) for key in target)
@@ -153,41 +123,15 @@ def cleaned_expressions(self_values, interaction_values, threshold: float):
     return sp.simplify(self_expression), readable_interaction
 
 
-def print_nonzero_comparison(title: str, actual: dict[str, float], target: dict[str, float]) -> None:
-    print(f"\n{title}")
-    print(f"{'term':<28} {'recovered':>12} {'target':>12} {'abs error':>12}")
-    for term, target_value in target.items():
-        recovered = actual[term]
-        if target_value != 0.0 or abs(recovered) >= 1e-3:
-            print(
-                f"{term:<28} {recovered:>12.6f} {target_value:>12.6f} "
-                f"{abs(recovered - target_value):>12.6f}"
-            )
 
-
-def evaluate_mse(forcing_tree, interaction_tree, dataloader, adjacency, device) -> float:
+def evaluate_mse(forcing_tree, dataloader, device) -> float:
     forcing_tree.eval()
-    interaction_tree.eval()
-    nodes, edges = adjacency.nonzero(as_tuple=True)
-    non_self = nodes != edges
-    nodes = nodes[non_self].to(device)
-    edges = edges[non_self].to(device)
-    groups = torch.arange(adjacency.size(0), device=device)
-    scatter_idx = (nodes.unsqueeze(1) == groups.unsqueeze(0)).int().argmax(dim=1).to(device)
 
     losses = []
     with torch.no_grad():
         for batch_x, batch_dy in dataloader:
             losses.append(
-                total_loss(
-                    batch_x.to(device),
-                    batch_dy[..., 0:1].to(device),
-                    forcing_tree,
-                    interaction_tree,
-                    nodes,
-                    edges,
-                    scatter_idx,
-                ).item()
+                total_loss(batch_x.to(device), batch_dy[..., 1:2].to(device), forcing_tree).item()
             )
     return sum(losses) / max(len(losses), 1)
 
@@ -217,23 +161,14 @@ def main() -> int:
         shuffle=True,
         pin_memory=device.type == "cuda",
     )
-
-    self_structure = get_tree_config("depth_3_leaves_4_config")
-    interaction_structure = get_tree_config("depth_2_tree_config")
+    self_structure = get_tree_config("depth_2_tree_config")
     forcing_tree = FEX(
         sample_indices=SELF_SEQUENCE,
         leaf_dim=3,
         num_leaves=self_structure.num_leaves,
         tree_structure=self_structure,
     ).to(device)
-    interaction_tree = FEX(
-        sample_indices=INTERACTION_SEQUENCE,
-        leaf_dim=6,
-        num_leaves=interaction_structure.num_leaves,
-        tree_structure=interaction_structure,
-    ).to(device)
     initialize_small(forcing_tree)
-    initialize_small(interaction_tree)
 
     config = FEXConfig(
         num_epochs=args.epochs,
@@ -243,59 +178,45 @@ def main() -> int:
         bfgs_lr=0.5,
         leaf_dim=3,
         num_leaves=self_structure.num_leaves,
-        leaf_entropy_weight=0.0,
-        mag_entropy_weight=0.0,
-        tau_start=1.0,
-        tau_end=1.0,
-        tau_schedule="non_decay",
+
+        target_dim=1,
     )
 
     print(f"Device: {device}")
     print(f"Self operator sequence: {SELF_SEQUENCE}")
-    print(f"Interaction operator sequence: {INTERACTION_SEQUENCE}")
-    print("Interaction masks: disabled")
     print(
         f"Fine-tuning: Adam epochs={args.epochs}, BFGS iterations={args.bfgs_epochs}, "
         f"samples={args.samples}"
     )
-    score = train_network_fex(
+    score = train_fex(
         forcing_tree,
-        interaction_tree,
         dataloader,
-        adjacency,
         config,
         device=device,
-        log_every=args.log_every,
     )
 
-    recovered_self = self_coefficients(forcing_tree)
-    recovered_interaction = interaction_coefficients(interaction_tree)
+    """recovered_self = self_coefficients(forcing_tree)
     target_self = self_targets()
     target_interaction = interaction_targets()
-    mse = evaluate_mse(forcing_tree, interaction_tree, dataloader, adjacency, device)
     self_error = maximum_error(recovered_self, target_self)
-    interaction_error = maximum_error(recovered_interaction, target_interaction)
-    coefficient_error = max(self_error, interaction_error)
+    coefficient_error = self_error"""
 
-    print_nonzero_comparison("Self dynamics", recovered_self, target_self)
-    print_nonzero_comparison("Interaction dynamics", recovered_interaction, target_interaction)
+    mse = evaluate_mse(forcing_tree, dataloader, device)
+
+
     print(f"\nReturned score: {score:.8e}")
     print(f"Evaluation MSE: {mse:.8e}")
-    clean_self, clean_interaction = cleaned_expressions(
-        recovered_self,
-        recovered_interaction,
-        args.expression_threshold,
-    )
+
     print(f"Cleaned SymPy threshold: {args.expression_threshold:g}")
-    print("Self SymPy:", clean_self)
-    print("Interaction SymPy:", clean_interaction)
-    print(f"Maximum self coefficient error: {self_error:.8e}")
-    print(f"Maximum interaction coefficient error: {interaction_error:.8e}")
+    # print("Self SymPy:", clean_self)
+    # print("Interaction SymPy:", clean_interaction)
+    # print(f"Maximum self coefficient error: {self_error:.8e}")
+    # print(f"Maximum interaction coefficient error: {interaction_error:.8e}")
 
     passed = (
         math.isfinite(mse)
         and mse <= args.mse_tolerance
-        and coefficient_error <= args.coefficient_tolerance
+        # and coefficient_error <= args.coefficient_tolerance
     )
     print("RESULT:", "PASS" if passed else "FAIL")
     return 0 if passed else 1

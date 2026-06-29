@@ -392,7 +392,7 @@ def main():
         if args.mode == "inter_test":  # inter_test
             train_logger.info("Mode inter_test: baseline uses inter tree mul(sigmoid, sigmoid)")
             candidate_forcing_op_indices = [0, 0, 0, 0, 1, 2, 0]
-            candidate_inter_op_indices = [2, 5, 4]
+            candidate_inter_op_indices = [2, 5, 5]
         if args.mode == "top-pmf":
             train_logger.info("Mode top-pmf: baseline uses inter tree mul(identity, top_pmf)")
             candidate_forcing_op_indices = [0, 0, 0, 1, 0, 0, 4]
@@ -486,7 +486,7 @@ def main():
     baseline_name_map = {
         "default": "random_sequence",
         "sigmoid": "sigmoid_sequence",
-        "inter_test": "sigmoid_mul_sigmoid_sequence",
+        "inter_test": "sigmoid_sub_sigmoid_sequence",
         "top-pmf": "top_pmf_sequence",
     }
     baseline_name = baseline_name_map[args.mode]
@@ -510,19 +510,21 @@ def main():
     name_map = {
         "default": "Random",
         "sigmoid": "Sigmoid",
-        "inter_test": "Sigmoid-Mul-Sigmoid",
+        "inter_test": "Sigmoid-sub-Sigmoid",
         "top-pmf": "Top-PMF",
     }
     name = name_map[args.mode]
+    random_ground_truth_rewards = np.asarray(random_ground_truth_rewards, dtype=np.float64)
+    random_init_rewards = np.asarray(random_init_rewards, dtype=np.float64)
     df = pd.concat(
         [
             pd.DataFrame({
                 "distribution": f"{name} Sequences Mean: {np.mean(random_init_rewards):.4f}",
-                "reward": random_init_rewards,
+                "reward": random_init_rewards[random_init_rewards > 0.8],
             }),
             pd.DataFrame({
                 "distribution": f"Ground Truth Mean: {np.mean(random_ground_truth_rewards):.4f}",
-                "reward": random_ground_truth_rewards,
+                "reward": random_ground_truth_rewards[random_ground_truth_rewards > 0.8],
             }),
         ],
         ignore_index=True,
@@ -535,7 +537,7 @@ def main():
         data=df,
         x="reward",
         hue="distribution",
-        bins=100,
+        bins=200,
         stat="count",
         common_norm=False,
         element="step",

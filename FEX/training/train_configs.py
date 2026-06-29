@@ -58,12 +58,11 @@ class ControllerConfig():
 
 @dataclass
 class FEXConfig():
-    num_groups: int = 1
+    target_dim: int = 0
+    
     leaf_dim: int = None
     num_leaves: int = None
-    leaf_entropy_weight: float = 0.0
-    decay_entropy_until: float = 0.0
-    set_hard_at: float = 1.0
+
 
     lr: float = 0.02
     inter_lr: float = 0.008
@@ -72,20 +71,6 @@ class FEXConfig():
 
     bfgs_epochs: int = 15
     bfgs_lr: float = 0.8
-
-    tau_start: float = 8.0
-    tau_end: float = 4.0
-    tau_schedule: str = "exponential"  # one of: exponential, linear, non_decay
-
-    # Regularization
-    mag_entropy_weight: float = 0.0 
-    pct_cosine_restart: float = 1.0
-
-    epsilon_greedy: float = 0.0
-    
-    def __post_init__(self):
-        self.tau_anneal_epochs = self.num_epochs
-        self.set_hard_at_epoch = int(self.num_epochs * self.set_hard_at) # default: Dont set hard
 
 
 runtimeconfig = RunTimeConfig()

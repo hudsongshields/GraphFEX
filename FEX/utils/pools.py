@@ -44,6 +44,25 @@ class Pool():
         self.pool.sort(key=lambda x: x.reward, reverse=True)
     def __iter__(self):
         return iter(self.pool)
+    def visualize_candidates(self, directory: str = "candidates_viz", clear_directory: bool = True):
+        target = Path(directory)
+        if clear_directory and target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True, exist_ok=True)
+        for cand in self.pool:
+            cand.node.visualize_tree(directory=str(target / f"forcing_tree{cand.id}"))
+
+    def _build_fex_checkpoint(self, fex):
+        return {"state_dict": fex.state_dict()}
+    def save_candidates(self, directory: str, clear_directory: bool = True):
+        target = Path(directory)
+        if clear_directory and target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True, exist_ok=True)
+        for cand in self.pool:
+            torch.save(self._build_fex_checkpoint(cand.node), target / f"forcing_tree{cand.id}.pt")
+    
+
 
 # --- GraphPool and GraphPoolCandidate with robust load_candidates ---
 from dataclasses import dataclass
