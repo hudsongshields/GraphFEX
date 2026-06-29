@@ -138,12 +138,12 @@ def evaluate_mse(forcing_tree, dataloader, device, dim) -> float:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=int, default=1500)
-    parser.add_argument("--bfgs-epochs", type=int, default=100)
-    parser.add_argument("--samples", type=int, default=2048)
+    parser.add_argument("--epochs", type=int, default=10000)
+    parser.add_argument("--bfgs-epochs", type=int, default=0)
+    parser.add_argument("--samples", type=int, default=4096)
     parser.add_argument("--nodes", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=0.02)
+    parser.add_argument("--lr", type=float, default=0.002)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--coefficient-tolerance", type=float, default=0.02)
@@ -152,7 +152,9 @@ def main() -> int:
     parser.add_argument("--dim", type=int, default=1)
     args = parser.parse_args()
     if args.dim == 2:
-        SELF_SEQUENCE = [0, 0, 0]
+        SELF_SEQUENCE = [0, 0, 5]
+    if args.dim == 1:
+        SELF_SEQUENCE = [0, 0, 1]
 
     seed_everything(args.seed)
     device = torch.device(runtimeconfig.device)
@@ -190,11 +192,13 @@ def main() -> int:
         f"Fine-tuning: Adam epochs={args.epochs}, BFGS iterations={args.bfgs_epochs}, "
         f"samples={args.samples}"
     )
+    train_logger = runtimeconfig.CreateLogger(log_path=f"HR/logs/finetune_ground_truth_dim_{args.dim}.log")
     score = train_fex(
         forcing_tree,
         dataloader,
         config,
         device=device,
+        verbose=True,
     )
 
     """recovered_self = self_coefficients(forcing_tree)

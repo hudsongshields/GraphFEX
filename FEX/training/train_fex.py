@@ -204,6 +204,7 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.
 
     train_logger = runtimeconfig.train_logger if verbose else None
 
+    best_epoch_loss = float('inf')
     for epoch in range(config.num_epochs):
         epoch_loss = 0.0
         num_batches = 0
@@ -218,47 +219,67 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.
 
             epoch_loss += loss.item()
             num_batches += 1
+        
+        if epoch_loss / num_batches < best_epoch_loss:
+            best_epoch_loss = epoch_loss / max(1, num_batches)
             
         if train_logger is not None:
             train_logger.info(f"Processing batch with shape {batch_x.shape}, target shape {batch_dy_val.shape}")
-            train_logger.info(f"Epoch {epoch}, Loss: {epoch_loss/num_batches:.4f}")
-    
+            train_logger.info(f"Epoch {epoch}, Loss: {epoch_loss/max(1, num_batches):.4f}")
+            train_logger.info(f"FEX sequence: {str(forcing_tree.__str__())}")
+
     if config.bfgs_epochs > 0:
-        bfgs_batches = list(dataloader)
-        forcing_tree_params = forcing_tree.all_parameters()
-        bfgs_optim = torch.optim.LBFGS(forcing_tree_params, lr=config.lr, max_iter=config.bfgs_epochs)
+        all_parameters = list(forcing_tree.all_parameters())
+        bfgs_optim = torch.optim.LBFGS(
+            all_parameters,
+            lr=config.bfgs_lr,
+            max_iter=config.bfgs_epochs,
+            line_search_fn="strong_wolfe"
+        )
+
+        bfgs_batches = []
+        for batch_x, batch_dy_val in dataloader:
+            batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim+1]
+
+            if device == 'cuda':
+                batch_x = batch_x.to(device, non_blocking=True)
+                batch_dy_val = batch_dy_val.to(device, non_blocking=True)
+            else:
+                batch_x = batch_x.to(device)
+                batch_dy_val = batch_dy_val.to(device)
+
+            bfgs_batches.append((batch_x, batch_dy_val))
+
         def closure():
             bfgs_optim.zero_grad()
+
             accumulated_loss = 0.0
+            total_pred_error = 0.0
             for batch_x, batch_dy_val in bfgs_batches:
-                batch_x = batch_x.to(device)
-                batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim+1].to(device)
-                loss = total_loss(batch_x, batch_dy_val, forcing_tree)
-                loss.backward()
-                accumulated_loss += loss.item()
+                pred_error = total_loss(batch_x, batch_dy_val, forcing_tree)
+                accumulated_loss = accumulated_loss + pred_error
+                total_pred_error = total_pred_error + pred_error.detach().item()
+
+            accumulated_loss.backward()
             return accumulated_loss / len(bfgs_batches)
-        
+
         bfgs_optim.step(closure)
-
-    forcing_tree.eval()
-
-    final_pred_losses = []
-    with torch.no_grad():
-        for batch_x, batch_dy_val in dataloader:
-            batch_x = batch_x.to(device)
-            batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim + 1].to(device)
-
-            loss = total_loss(
-                batch_x,
-                batch_dy_val,
-                forcing_tree,
-            )
-
-            final_pred_losses.append(loss.item())
-
-    forcing_tree.train()
-
-    return sum(final_pred_losses) / max(len(final_pred_losses), 1)
+        if train_logger is not None:
+            train_logger.info(f"FEX string representation after BFGS optim: {forcing_tree}")
+            train_logger.info(f"Loss after BFGS optim: {best_epoch_loss}")
+        with torch.no_grad():
+            final_pred_losses = [
+                total_loss(
+                    batch_x,
+                    batch_dy_val,
+                    forcing_tree,
+                ).item()
+                for batch_x, batch_dy_val in bfgs_batches
+            ]
+        bfgs_loss_val = sum(final_pred_losses) / len(final_pred_losses) 
+        if best_epoch_loss > bfgs_loss_val:
+            best_epoch_loss = bfgs_loss_val
+    return best_epoch_loss
         
 
 

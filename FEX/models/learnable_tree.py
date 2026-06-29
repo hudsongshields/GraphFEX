@@ -27,16 +27,6 @@ class LeafMLP(nn.Module):
             self.logits.normal_(mean=0.0, std=0.1)
             self.bias.zero_()
 
-    """ Gumbel softmax control """
-    def set_hard(self, hard: bool):
-        pass
-
-    def set_tau(self, tau: float):
-        pass
-
-    def get_tau(self):
-        return 0.0
-
     
     """ Printable expression """
     def _selected_dim(self):
@@ -57,7 +47,7 @@ class LeafMLP(nn.Module):
     
 
 class FEX(nn.Module):
-    def __init__(self, leaf_dim, num_leaves, sample_indices=None, tree_structure=None, parent_node=None, init_tau=5.0, hard=False, **kwargs): 
+    def __init__(self, leaf_dim, num_leaves, sample_indices=None, tree_structure=None, parent_node=None, **kwargs): 
         super().__init__()
         self.leaf_dim = leaf_dim
         
@@ -70,7 +60,7 @@ class FEX(nn.Module):
         else:
             self.parent_node = None
 
-        leaf_mlps = [LeafMLP(self.leaf_dim, init_tau=init_tau, hard=hard) for _ in range(num_leaves)]
+        leaf_mlps = [LeafMLP(self.leaf_dim) for _ in range(num_leaves)]
         for idx, leaf in enumerate(leaf_mlps):
             leaf._debug_leaf_idx = idx
         self.leaf_mlps = nn.ModuleList(leaf_mlps)
@@ -127,18 +117,9 @@ class FEX(nn.Module):
         )
 
     def reset(self, fex_config=None):
-        if fex_config is not None and hasattr(fex_config, 'tau_start'):
-            tau_value = float(fex_config.tau_start)
-        else:
-            tau_value = 5.0
-
         for leaf in self.leaf_mlps:
             if hasattr(leaf, 'reset_parameters'):
                 leaf.reset_parameters()
-            if hasattr(leaf, 'tau'):
-                leaf.tau.fill_(tau_value)
-            if hasattr(leaf, 'hard'):
-                leaf.hard = False
 
         # Reset all tree node parameters as in their constructor, but keep structure
         def action(node: Node):
@@ -182,20 +163,6 @@ class FEX(nn.Module):
         self._set_tree_training_mode(mode)
         return self
 
-    """ Gumbel Softmax Control """
-    def set_leaf_tau(self, tau: float):
-        for leaf_mlp in self.leaf_mlps:
-            leaf_mlp.set_tau(tau)
-
-    def get_leaf_tau(self):
-        if len(self.leaf_mlps) == 0:
-            return None
-        return self.leaf_mlps[0].get_tau()
-    
-    def set_leaf_hard(self, hard: bool):
-        for leaf_mlp in self.leaf_mlps:
-            leaf_mlp.set_hard(hard)
-    
 
     # helper to identify which tree config was used for this FEX instance
     def _tree_config_name(self):
