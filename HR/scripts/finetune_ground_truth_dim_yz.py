@@ -124,14 +124,14 @@ def cleaned_expressions(self_values, interaction_values, threshold: float):
 
 
 
-def evaluate_mse(forcing_tree, dataloader, device) -> float:
+def evaluate_mse(forcing_tree, dataloader, device, dim) -> float:
     forcing_tree.eval()
 
     losses = []
     with torch.no_grad():
         for batch_x, batch_dy in dataloader:
             losses.append(
-                total_loss(batch_x.to(device), batch_dy[..., 1:2].to(device), forcing_tree).item()
+                total_loss(batch_x.to(device), batch_dy[..., dim:dim+1].to(device), forcing_tree).item()
             )
     return sum(losses) / max(len(losses), 1)
 
@@ -149,7 +149,10 @@ def main() -> int:
     parser.add_argument("--coefficient-tolerance", type=float, default=0.02)
     parser.add_argument("--mse-tolerance", type=float, default=1e-5)
     parser.add_argument("--expression-threshold", type=float, default=0.002)
+    parser.add_argument("--dim", type=int, default=1)
     args = parser.parse_args()
+    if args.dim == 2:
+        SELF_SEQUENCE = [0, 0, 0]
 
     seed_everything(args.seed)
     device = torch.device(runtimeconfig.device)
@@ -174,12 +177,11 @@ def main() -> int:
         num_epochs=args.epochs,
         bfgs_epochs=args.bfgs_epochs,
         lr=args.lr,
-        inter_lr=args.lr,
         bfgs_lr=0.5,
         leaf_dim=3,
         num_leaves=self_structure.num_leaves,
 
-        target_dim=1,
+        target_dim=args.dim,
     )
 
     print(f"Device: {device}")
@@ -201,7 +203,7 @@ def main() -> int:
     self_error = maximum_error(recovered_self, target_self)
     coefficient_error = self_error"""
 
-    mse = evaluate_mse(forcing_tree, dataloader, device)
+    mse = evaluate_mse(forcing_tree, dataloader, device, args.dim)
 
 
     print(f"\nReturned score: {score:.8e}")

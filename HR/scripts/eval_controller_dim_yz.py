@@ -22,9 +22,8 @@ DATA_DIR = HR_DIR / "data"
 
 def setup_run_dir() -> Path:
     job_id = os.environ.get("SLURM_JOB_ID", "local")
-    run_dir = HR_DIR / "dim1_controller" / f"run_{job_id}"
+    run_dir = HR_DIR / "logs_controller" / f"run_{job_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "pre_finetune").mkdir(parents=True, exist_ok=True)
     return run_dir
 
 def seed_everything(seed=42):
@@ -43,6 +42,7 @@ def main():
     parser.add_argument("--samples", type=int, default=2048)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--dim", type=int, default=1)
     args = parser.parse_args()
 
     seed_everything(args.seed)
@@ -66,8 +66,8 @@ def main():
     controller_config = ControllerConfig(
         input_dim=20,
         hidden_dim=64,
-        lr=0.001,
-        num_epochs=1000,
+        lr=0.005,
+        num_epochs=200,
         num_cands_per_epoch=10,
         percentile_threshold=0.4,
         num_trees=2,
@@ -76,16 +76,17 @@ def main():
 
     fex_config = FEXConfig(
         num_epochs=60,
-        bfgs_epochs=20,
+        bfgs_epochs=0,
         lr=0.2,
         bfgs_lr=0.1,
         leaf_dim=states.shape[2],
         num_leaves=forcing_tree_config.num_leaves,
 
-        target_dim=1,
+        target_dim=args.dim,
     )
 
-    save_dir = run_dir / "pre_finetune"
+    save_dir = run_dir / f"pre_finetune_dim{args.dim}"
+    save_dir.mkdir(parents=True, exist_ok=True)
     best_candidates = train_controller(
         forcing_tree_config,
         dataloader,

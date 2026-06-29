@@ -199,7 +199,7 @@ def train_network_fex(
 
 def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.device, verbose=False):
     forcing_tree = forcing_tree.to(device)
-    forcing_tree_params = forcing_tree.parameters()
+    forcing_tree_params = forcing_tree.all_parameters()
     optim = torch.optim.Adam(forcing_tree_params, lr=config.lr)
 
     train_logger = runtimeconfig.train_logger if verbose else None
@@ -225,7 +225,7 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.
     
     if config.bfgs_epochs > 0:
         bfgs_batches = list(dataloader)
-        forcing_tree_params = forcing_tree.parameters()
+        forcing_tree_params = forcing_tree.all_parameters()
         bfgs_optim = torch.optim.LBFGS(forcing_tree_params, lr=config.lr, max_iter=config.bfgs_epochs)
         def closure():
             bfgs_optim.zero_grad()
