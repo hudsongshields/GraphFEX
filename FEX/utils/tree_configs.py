@@ -6,7 +6,6 @@ from .operations import UNARY_OPS, BINARY_OPS
 
 # API only allows access to tree configs
 __all__ = [
-    "TREE_CONFIGS",
     "get_tree_config",
 ]
 

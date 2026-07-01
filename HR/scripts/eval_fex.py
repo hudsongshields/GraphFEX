@@ -88,14 +88,12 @@ def _log_fex_trees(
         leaf_dim=fex_config.leaf_dim,
         num_leaves=forcing_tree_config.num_leaves,
         tree_structure=forcing_tree_config,
-        init_tau=fex_config.tau_start,
     ).to(device)
     inter_fex = FEX(
         sample_indices=i_idx,
         leaf_dim=fex_config.leaf_dim * 2,
         num_leaves=inter_tree_config.num_leaves,
         tree_structure=inter_tree_config,
-        init_tau=fex_config.tau_start,
     ).to(device)
 
     logger.info(f"[{label}] forcing tree: {str(forcing_fex)}")
@@ -178,14 +176,12 @@ def _run_fex_samples(
         leaf_dim=fex_config.leaf_dim,
         num_leaves=forcing_tree_config.num_leaves,
         tree_structure=forcing_tree_config,
-        init_tau=fex_config.tau_start,
     ).to(device)
     inter_fex = FEX(
         sample_indices=i_indices,
         leaf_dim=fex_config.leaf_dim * 2,
         num_leaves=inter_tree_config.num_leaves,
         tree_structure=inter_tree_config,
-        init_tau=fex_config.tau_start,
     ).to(device)
 
     rewards = []
@@ -227,7 +223,7 @@ def main():
     parser.add_argument("--num_epochs", type=int, default=60)
     parser.add_argument("--bfgs_epochs", type=int, default=40)
     parser.add_argument("--mode", type=str, default="default", choices=["default", "sigmoid", "inter_test", "top-pmf"])
-    # parser.add_argument("--lr_decay", type=float, default=0.0)
+    parser.add_argument("--snr", type=float, default=50)
     args = parser.parse_args()
 
     run_dir = setup_run_dir(args.num_epochs, args.batch_size, job_id=args.job_id, mode=args.mode)
@@ -244,7 +240,7 @@ def main():
     inter_tree_config = get_tree_config("depth_2_tree_config")
 
     adj_matrix_tensor = make_adjacency(num_nodes=100, probability=0.35, device=runtimeconfig.device)
-    x_data, dx_dt = make_data(num_samples=2048, adjacency=adj_matrix_tensor)
+    x_data, dx_dt = make_data(num_samples=4096, adjacency=adj_matrix_tensor, snr=args.snr)
     dataloader = make_dataloader(x_data, dx_dt, args.batch_size)
 
     controller_config = ControllerConfig(
@@ -267,9 +263,6 @@ def main():
         bfgs_lr=0.1,
         leaf_dim=x_data.shape[2],
         num_leaves=forcing_tree_config.num_leaves,
-        pct_cosine_restart=1.0,
-        tau_start=1.0,
-        tau_end=1.0,
     )
 
     ground_truth_forcing_op_indices = torch.tensor(
@@ -316,14 +309,12 @@ def main():
             leaf_dim=fex_config.leaf_dim,
             num_leaves=forcing_tree_config.num_leaves,
             tree_structure=forcing_tree_config,
-            init_tau=fex_config.tau_start,
         ).to(runtimeconfig.device)
         inter_fex = FEX(
             sample_indices=ground_truth_inter_op_indices,
             leaf_dim=fex_config.leaf_dim * 2,
             num_leaves=inter_tree_config.num_leaves,
             tree_structure=inter_tree_config,
-            init_tau=fex_config.tau_start,
         ).to(runtimeconfig.device)
 
         t1 = time.time()
@@ -390,9 +381,9 @@ def main():
             candidate_forcing_op_indices = [0, 0, 0, 0, 5, 5, 5]
             candidate_inter_op_indices = [1, 0, 5]
         if args.mode == "inter_test":  # inter_test
-            train_logger.info("Mode inter_test: baseline uses inter tree mul(sigmoid, sigmoid)")
+            train_logger.info("Mode inter_test: baseline uses inter tree sub(identity, sigmoid)")
             candidate_forcing_op_indices = [0, 0, 0, 0, 1, 2, 0]
-            candidate_inter_op_indices = [2, 5, 5]
+            candidate_inter_op_indices = [2, 0, 5]
         if args.mode == "top-pmf":
             train_logger.info("Mode top-pmf: baseline uses inter tree mul(identity, top_pmf)")
             candidate_forcing_op_indices = [0, 0, 0, 1, 0, 0, 4]

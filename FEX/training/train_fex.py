@@ -43,6 +43,7 @@ def train_network_fex(
 
 
     # Precompute edge indices - used by both group_loss
+    adj_matrix = adj_matrix.to(device)
     nodes, edges = adj_matrix.nonzero(as_tuple=True)
     interaction_indices = nodes != edges
     nodes = nodes[interaction_indices].to(device)
@@ -53,8 +54,6 @@ def train_network_fex(
     scatter_idx = (nodes.unsqueeze(1) == group_indices.unsqueeze(0)).int().argmax(dim=1)
 
     best_epoch_loss = float('inf')
-    best_forcing_tree = None
-    best_inter_tree = None
     train_logger = runtimeconfig.train_logger if verbose else None
     if train_logger:
         train_logger.debug(f'Initial Equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}')
@@ -66,12 +65,12 @@ def train_network_fex(
         num_batches = 0
         for batch_x, batch_dy_val in dataloader:
             batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim+1]
-            if device == 'cpu':
-                batch_x = batch_x.to(device)
-                batch_dy_val = batch_dy_val.to(device)
-            else:
+            if device == 'cuda':
                 batch_x = batch_x.to(device, non_blocking=True)
                 batch_dy_val = batch_dy_val.to(device, non_blocking=True)
+            else:
+                batch_x = batch_x.to(device)
+                batch_dy_val = batch_dy_val.to(device)
 
             adam_optim_self.zero_grad()
             adam_optim_inter.zero_grad()
@@ -94,8 +93,6 @@ def train_network_fex(
 
         if mean_epoch_pred_loss < best_epoch_loss:
             best_epoch_loss = mean_epoch_pred_loss
-            best_forcing_tree = forcing_tree.copy_inorder()
-            best_inter_tree = inter_dynam_tree.copy_inorder()
 
         if train_logger:
             train_logger.debug(f"Epoch {epoch+1}/{config.num_epochs}")
@@ -112,17 +109,15 @@ def train_network_fex(
                 f"Adam epoch {epoch + 1:>5}/{config.num_epochs}: "
                 f"pred_loss={mean_epoch_pred_loss:.8e}, "
                 f"self_lr={self_lr:.4g}, inter_lr={inter_lr:.4g}, "
+                f"forcing tree: {forcing_tree} \n interaction tree: {inter_dynam_tree}"
             )
     
     if config.bfgs_epochs > 0:
-        bfgs_forcing_tree = best_forcing_tree.to(device)
-        bfgs_inter_tree = best_inter_tree.to(device)
-        all_parameters = list(bfgs_forcing_tree.all_parameters()) + list(bfgs_inter_tree.all_parameters())
+        all_parameters = list(forcing_tree.all_parameters()) + list(inter_dynam_tree.all_parameters())
         bfgs_optim = torch.optim.LBFGS(
             all_parameters,
             lr=config.bfgs_lr,
             max_iter=config.bfgs_epochs,
-            line_search_fn="strong_wolfe"
         )
 
         # Prebuild train set for LBFGS closure
@@ -143,57 +138,44 @@ def train_network_fex(
             bfgs_optim.zero_grad()
 
             accumulated_loss = 0.0
-            total_pred_error = 0.0
+            valid_batches = 0
             for batch_x, batch_dy_val in bfgs_batches:
-                pred_error = total_loss(batch_x, batch_dy_val, bfgs_forcing_tree, bfgs_inter_tree, nodes, edges, scatter_idx)
+                pred_error = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
+                if not torch.isfinite(pred_error):
+                    continue
+                valid_batches += 1
                 accumulated_loss = accumulated_loss + pred_error
-                total_pred_error = total_pred_error + pred_error.detach().item()
 
+            if valid_batches == 0:
+                return torch.tensor(float('inf'), device=device)
             accumulated_loss.backward()
-            return accumulated_loss / len(bfgs_batches)
+            return accumulated_loss / valid_batches
 
-        if log_every > 0:
+        bfgs_optim.step(closure)
+
+        forcing_tree.eval()
+        inter_dynam_tree.eval()
+        final_pred_losses = [
+            total_loss(
+                batch_x,
+                batch_dy_val,
+                forcing_tree,
+                inter_dynam_tree,
+                nodes,
+                edges,
+                scatter_idx
+            ).item()
+            for batch_x, batch_dy_val in bfgs_batches 
+        ]
+
+        bfgs_loss_val = sum(final_pred_losses) / len(final_pred_losses) 
+        if verbose:
             print(
-                f"Starting LBFGS refinement: max_iter={config.bfgs_epochs}, "
+                f"LBFGS refinement: max_iter={config.bfgs_epochs}, loss={bfgs_loss_val:.8e}, "
                 f"lr={config.bfgs_lr}, starting_pred_loss={best_epoch_loss:.8e}"
             )
-        bfgs_optim.step(closure)
-        with torch.no_grad():
-            final_pred_losses = [
-                total_loss(
-                    batch_x,
-                    batch_dy_val,
-                    bfgs_forcing_tree,
-                    bfgs_inter_tree,
-                    nodes,
-                    edges,
-                    scatter_idx,
-                ).item()
-                for batch_x, batch_dy_val in bfgs_batches
-            ]
-        bfgs_loss_val = sum(final_pred_losses) / len(final_pred_losses)
-        # train_logger.info(f"BFGS Completed (max_iter={config.bfgs_epochs}), Loss: {bfgs_loss_val:.4f}")
-
-        if not math.isfinite(bfgs_loss_val):
-            # train_logger.warning(f"BFGS produced non-finite loss: {bfgs_loss_val}")
-            if best_epoch_loss != float('inf'):
-                # train_logger.info(f"Returning best epoch loss from Adam phase: {best_epoch_loss:.4f}")
-                copy_fex_state_(forcing_tree, best_forcing_tree)
-                copy_fex_state_(inter_dynam_tree, best_inter_tree)
-                return best_epoch_loss
-            return float('inf')
-
-        print(f"BFGS PredLoss: {bfgs_loss_val:.4f}, Best Adam PredLoss: {best_epoch_loss:.4f}")
         if bfgs_loss_val < best_epoch_loss:
             best_epoch_loss = bfgs_loss_val
-            copy_fex_state_(forcing_tree, bfgs_forcing_tree)
-            copy_fex_state_(inter_dynam_tree, bfgs_inter_tree)
-        else:
-            copy_fex_state_(forcing_tree, best_forcing_tree)
-            copy_fex_state_(inter_dynam_tree, best_inter_tree)
-    elif best_forcing_tree is not None and best_inter_tree is not None:
-        copy_fex_state_(forcing_tree, best_forcing_tree)
-        copy_fex_state_(inter_dynam_tree, best_inter_tree)
 
     return float(best_epoch_loss)
 

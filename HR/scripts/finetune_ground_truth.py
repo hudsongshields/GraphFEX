@@ -7,6 +7,7 @@ import sys
 
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+from HR.data.generate_data import make_adjacency, make_data
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -20,7 +21,7 @@ from FEX.training.train_fex import train_network_fex
 from FEX.utils.tree_configs import get_tree_config
 
 
-SELF_SEQUENCE = [0, 0, 0, 0, 1, 2, 0]
+SELF_SEQUENCE = [0, 0, 0, 1, 2, 1, 0]
 INTERACTION_SEQUENCE = [1, 0, 5]
 VARIABLES = ["x_i", "y_i", "z_i", "x_j", "y_j", "z_j"]
 
@@ -194,23 +195,24 @@ def evaluate_mse(forcing_tree, interaction_tree, dataloader, adjacency, device) 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=int, default=1500)
-    parser.add_argument("--bfgs-epochs", type=int, default=100)
-    parser.add_argument("--samples", type=int, default=2048)
-    parser.add_argument("--nodes", type=int, default=8)
-    parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=0.02)
+    parser.add_argument("--epochs", type=int, default=10000)
+    parser.add_argument("--bfgs-epochs", type=int, default=0)
+    parser.add_argument("--samples", type=int, default=10000)
+    parser.add_argument("--nodes", type=int, default=100)
+    parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument("--lr", type=float, default=0.002)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--coefficient-tolerance", type=float, default=0.02)
     parser.add_argument("--mse-tolerance", type=float, default=1e-5)
-    parser.add_argument("--expression-threshold", type=float, default=0.002)
+    parser.add_argument("--expression-threshold", type=float, default=0.1)
+    parser.add_argument("--snr", type=int, default=None)
     args = parser.parse_args()
 
     seed_everything(args.seed)
     device = torch.device(runtimeconfig.device)
     adjacency = make_adjacency(args.nodes, probability=0.35, device=device)
-    states, derivatives = make_data(args.samples, adjacency)
+    states, derivatives = make_data(args.samples, adjacency, snr=args.snr)
     dataloader = DataLoader(
         TensorDataset(states, derivatives),
         batch_size=args.batch_size,
@@ -223,13 +225,11 @@ def main() -> int:
     forcing_tree = FEX(
         sample_indices=SELF_SEQUENCE,
         leaf_dim=3,
-        num_leaves=self_structure.num_leaves,
         tree_structure=self_structure,
     ).to(device)
     interaction_tree = FEX(
         sample_indices=INTERACTION_SEQUENCE,
         leaf_dim=6,
-        num_leaves=interaction_structure.num_leaves,
         tree_structure=interaction_structure,
     ).to(device)
     initialize_small(forcing_tree)
@@ -241,13 +241,8 @@ def main() -> int:
         lr=args.lr,
         inter_lr=args.lr,
         bfgs_lr=0.5,
-        leaf_dim=3,
-        num_leaves=self_structure.num_leaves,
-        leaf_entropy_weight=0.0,
-        mag_entropy_weight=0.0,
-        tau_start=1.0,
-        tau_end=1.0,
-        tau_schedule="non_decay",
+
+        expression_threshold=args.expression_threshold
     )
 
     print(f"Device: {device}")
@@ -256,8 +251,9 @@ def main() -> int:
     print("Interaction masks: disabled")
     print(
         f"Fine-tuning: Adam epochs={args.epochs}, BFGS iterations={args.bfgs_epochs}, "
-        f"samples={args.samples}"
+        f"samples={args.samples}, snr={args.snr}"
     )
+    # train_logger = runtimeconfig.CreateLogger(log_path=f"HR/logs/finetune_ground_truth_dim_0_SNR{args.snr}.log")
     score = train_network_fex(
         forcing_tree,
         interaction_tree,
@@ -265,7 +261,8 @@ def main() -> int:
         adjacency,
         config,
         device=device,
-        log_every=args.log_every,
+        verbose=False,
+        log_every=args.log_every
     )
 
     recovered_self = self_coefficients(forcing_tree)

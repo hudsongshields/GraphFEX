@@ -31,12 +31,14 @@ def make_data(num_samples: int, adjacency: torch.Tensor, snr: int = None) -> tup
     x_i = states[..., 0]
     y_i = states[..., 1]
     z_i = states[..., 2]
-    self_dynamics = y_i - x_i.pow(3) + 3.0 * x_i.pow(2) - z_i + 3.24
-    pairwise = 0.15 * (2.0 - x_i).unsqueeze(2) * torch.sigmoid(x_i).unsqueeze(1)
-    dx = self_dynamics + (pairwise * adjacency.unsqueeze(0)).sum(dim=2)
+    omega = 1 + 0.1 * torch.randn(num_nodes, device=adjacency.device)
 
-    dy = 1 - 5 * x_i.pow(2) - y_i
-    dz = 0.004 * (4 * (x_i + 1.6) - z_i)
+    self_dynamics = -omega * y_i - z_i
+    pairwise = 0.15 * (x_i.unsqueeze(1) - x_i.unsqueeze(2))
+    
+    dx = self_dynamics + (pairwise * adjacency.unsqueeze(0)).sum(dim=2)
+    dy = omega * x_i + 0.2 * y_i
+    dz = 0.2 + z_i * (x_i - 5.7)
 
     derivatives = torch.zeros_like(states)
     derivatives[..., 0] = dx

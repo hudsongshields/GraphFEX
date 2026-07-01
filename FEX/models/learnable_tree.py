@@ -47,7 +47,7 @@ class LeafMLP(nn.Module):
     
 
 class FEX(nn.Module):
-    def __init__(self, leaf_dim, num_leaves, sample_indices=None, tree_structure=None, parent_node=None, **kwargs): 
+    def __init__(self, leaf_dim, sample_indices=None, tree_structure=None, parent_node=None, **kwargs): 
         super().__init__()
         self.leaf_dim = leaf_dim
         
@@ -60,11 +60,13 @@ class FEX(nn.Module):
         else:
             self.parent_node = None
 
-        leaf_mlps = [LeafMLP(self.leaf_dim) for _ in range(num_leaves)]
+        leaf_mlps = [LeafMLP(self.leaf_dim) for _ in range(self.tree_structure.num_leaves)]
         for idx, leaf in enumerate(leaf_mlps):
             leaf._debug_leaf_idx = idx
         self.leaf_mlps = nn.ModuleList(leaf_mlps)
         self._normalize_leaf_unary_operations()
+
+        self.expr_thresh = kwargs.get("expression_threshold", 0.001)
 
 
     def forward(self, x: torch.Tensor):
@@ -199,7 +201,7 @@ class FEX(nn.Module):
 
     
     def __str__(self):
-        return self.simplified_expression()
+        return self.simplified_expression(threshold=self.expr_thresh)
 
     def symbolic_expression(self, variable_names=None, digits: int = 4, threshold: float = 1e-6):
         """Build the paper-style elementwise leaf expression with SymPy."""

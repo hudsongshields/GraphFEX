@@ -43,6 +43,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dim", type=int, default=1)
+    parser.add_argument("--snr", type=float, default=None)
+    parser.add_argument("--num_epochs", type=int, default=60)
     args = parser.parse_args()
 
     seed_everything(args.seed)
@@ -55,7 +57,7 @@ def main():
     forcing_tree_config = get_tree_config("depth_2_tree_config")
 
     adjacency = make_adjacency(args.nodes, probability=0.35, device=runtimeconfig.device)
-    states, derivatives = make_data(args.samples, adjacency)
+    states, derivatives = make_data(args.samples, adjacency, snr=args.snr)
     dataloader = DataLoader(
         TensorDataset(states, derivatives),
         batch_size=args.batch_size,
@@ -75,7 +77,7 @@ def main():
     )
 
     fex_config = FEXConfig(
-        num_epochs=60,
+        num_epochs=args.num_epochs,
         bfgs_epochs=0,
         lr=0.2,
         bfgs_lr=0.1,
@@ -85,7 +87,7 @@ def main():
         target_dim=args.dim,
     )
 
-    save_dir = run_dir / f"pre_finetune_dim{args.dim}"
+    save_dir = run_dir / f"pre_finetune_dim{args.dim}_snr{args.snr if args.snr is not None else 'None'}"
     save_dir.mkdir(parents=True, exist_ok=True)
     best_candidates = train_controller(
         forcing_tree_config,

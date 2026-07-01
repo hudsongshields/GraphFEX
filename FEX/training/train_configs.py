@@ -25,6 +25,7 @@ class RunTimeConfig:
                 logger.removeHandler(handler)
                 handler.close()
 
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
         fh = logging.FileHandler(log_path, mode=mode)
         fh.setLevel(logging.DEBUG)
         ch = logging.StreamHandler()
@@ -44,11 +45,10 @@ class RunTimeConfig:
 
 @dataclass
 class ControllerConfig():
-    input_dim: int = 10
-    hidden_dim: int = 20
+    input_dim: int = 20
+    hidden_dim: int = 64
     lr: float = 0.01
     num_epochs: int = 100
-    num_trees: int = 2 # for forcing and interaction trees
 
     num_cands_per_epoch: int = 10
     percentile_threshold: float = 0.5
@@ -59,9 +59,7 @@ class ControllerConfig():
 @dataclass
 class FEXConfig():
     target_dim: int = 0
-    
-    leaf_dim: int = None
-    num_leaves: int = None
+    expression_threshold: float = 1e-4
 
 
     lr: float = 0.02

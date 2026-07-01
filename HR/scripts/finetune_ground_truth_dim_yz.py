@@ -138,28 +138,29 @@ def evaluate_mse(forcing_tree, dataloader, device, dim) -> float:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=int, default=10000)
+    parser.add_argument("--epochs", type=int, default=5000)
     parser.add_argument("--bfgs-epochs", type=int, default=0)
-    parser.add_argument("--samples", type=int, default=4096)
+    parser.add_argument("--samples", type=int, default=8192)
     parser.add_argument("--nodes", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=0.002)
+    parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--coefficient-tolerance", type=float, default=0.02)
     parser.add_argument("--mse-tolerance", type=float, default=1e-5)
     parser.add_argument("--expression-threshold", type=float, default=0.002)
     parser.add_argument("--dim", type=int, default=1)
+    parser.add_argument("--snr", type=int, default=0)
     args = parser.parse_args()
     if args.dim == 2:
-        SELF_SEQUENCE = [0, 0, 5]
+        SELF_SEQUENCE = [1, 0, 0]
     if args.dim == 1:
-        SELF_SEQUENCE = [0, 0, 1]
+        SELF_SEQUENCE = [0, 1, 0]
 
     seed_everything(args.seed)
     device = torch.device(runtimeconfig.device)
     adjacency = make_adjacency(args.nodes, probability=0.35, device=device)
-    states, derivatives = make_data(args.samples, adjacency)
+    states, derivatives = make_data(args.samples, adjacency, snr=args.snr)
     dataloader = DataLoader(
         TensorDataset(states, derivatives),
         batch_size=args.batch_size,
@@ -167,14 +168,6 @@ def main() -> int:
         pin_memory=device.type == "cuda",
     )
     self_structure = get_tree_config("depth_2_tree_config")
-    forcing_tree = FEX(
-        sample_indices=SELF_SEQUENCE,
-        leaf_dim=3,
-        num_leaves=self_structure.num_leaves,
-        tree_structure=self_structure,
-    ).to(device)
-    initialize_small(forcing_tree)
-
     config = FEXConfig(
         num_epochs=args.epochs,
         bfgs_epochs=args.bfgs_epochs,
@@ -184,7 +177,16 @@ def main() -> int:
         num_leaves=self_structure.num_leaves,
 
         target_dim=args.dim,
+        expression_threshold=args.expression_threshold,
     )
+    forcing_tree = FEX(
+        sample_indices=SELF_SEQUENCE,
+        leaf_dim=3,
+        num_leaves=self_structure.num_leaves,
+        tree_structure=self_structure,
+        expression_threshold=args.expression_threshold,
+    ).to(device)
+    initialize_small(forcing_tree)
 
     print(f"Device: {device}")
     print(f"Self operator sequence: {SELF_SEQUENCE}")
@@ -192,7 +194,7 @@ def main() -> int:
         f"Fine-tuning: Adam epochs={args.epochs}, BFGS iterations={args.bfgs_epochs}, "
         f"samples={args.samples}"
     )
-    train_logger = runtimeconfig.CreateLogger(log_path=f"HR/logs/finetune_ground_truth_dim_{args.dim}.log")
+    train_logger = runtimeconfig.CreateLogger(log_path=f"HR/logs/finetune_ground_truth_dim_{args.dim}_SNR{args.snr}.log")
     score = train_fex(
         forcing_tree,
         dataloader,

@@ -10,17 +10,10 @@ import re
 
 @dataclass
 class PoolCandidate:
-    node: "Node"
+    tree: "Node"
     reward: float
     id: int
 
-@dataclass
-class GraphPoolCandidate:
-    inter_tree: "Node"
-    forcing_tree: "Node"
-    reward: float
-    id: int
-    metadata: dict = None
 
 class Pool():
     def __init__(self, pool_size: int):
@@ -28,7 +21,7 @@ class Pool():
         self.pool_size = pool_size
         self.threshold = 0.0
     def add_new(self, candidate: PoolCandidate):
-        _, reward = candidate.node, candidate.reward
+        _, reward = candidate.tree, candidate.reward
         should_add = len(self.pool) < self.pool_size or reward > self.threshold
         if not should_add:
             return
@@ -50,7 +43,7 @@ class Pool():
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
         for cand in self.pool:
-            cand.node.visualize_tree(directory=str(target / f"forcing_tree{cand.id}"))
+            cand.tree.visualize_tree(directory=str(target / f"forcing_tree{cand.id}"))
 
     def _build_fex_checkpoint(self, fex):
         return {"state_dict": fex.state_dict()}
@@ -60,17 +53,9 @@ class Pool():
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
         for cand in self.pool:
-            torch.save(self._build_fex_checkpoint(cand.node), target / f"forcing_tree{cand.id}.pt")
+            torch.save(self._build_fex_checkpoint(cand.tree), target / f"forcing_tree{cand.id}.pt")
     
 
-
-# --- GraphPool and GraphPoolCandidate with robust load_candidates ---
-from dataclasses import dataclass
-from pathlib import Path
-import shutil
-import torch
-import re
-from torch.multiprocessing import Lock
 
 @dataclass
 class GraphPoolCandidate:

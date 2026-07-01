@@ -57,12 +57,11 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     forcing_fex = FEX(sample_indices=forcing_op_indices, **fex_kwargs).to(device)
 
     if inter_ops_per_node is not None:
-        adjacency = adj_matrix_global.to(device)
         score = train_network_fex(
             forcing_fex,
             inter_fex,
             dataloader_global,
-            adjacency,
+            adj_matrix_global,
             config=fex_config_global,
             device=device,
             verbose=False,
@@ -79,7 +78,7 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     if not math.isfinite(score):
         reward = 0.0
     else:
-        reward = 1.0 / (1.0 + score)
+        reward = 1.0 / math.sqrt(1.0 + score)
 
     for param in forcing_fex.parameters():
         param.requires_grad = False
@@ -113,7 +112,7 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
         runtimeconfig.CreateLogger(logger_path, name="train_logger", mode="a")
 
 
-def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, checkpoint_dir: Path = None, num_workers: int = None) -> GraphPool:
+def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, checkpoint_dir: Path = None, num_workers: int = 2) -> GraphPool:
     train_logger = runtimeconfig.train_logger
     num_gpus = torch.cuda.device_count()
     
@@ -133,12 +132,12 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
     controller_input = torch.zeros(config.input_dim).to(runtimeconfig.device)
 
     fex_kwargs = {
-        "leaf_dim": fex_config.leaf_dim,
+        "leaf_dim": next(iter(dataloader))[0].shape[2],
         "tree_structure": self_fex_struct,
     }
     fex_kwargs["num_leaves"] = self_fex_struct.num_leaves
     inter_fex_kwargs = {
-        "leaf_dim": fex_config.leaf_dim * 2,
+        "leaf_dim": next(iter(dataloader))[0].shape[2] * 2,
         "tree_structure": inter_fex_struct,
     }
     inter_fex_kwargs["num_leaves"] = inter_fex_struct.num_leaves
@@ -157,7 +156,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
 
     context = mp.get_context("spawn")
     gpu_ids = list(range(num_gpus)) if num_gpus > 0 else [None]
-    with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, runtimeconfig.train_log_path)) as pool:
+    with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, runtimeconfig.train_log_path)) as contextpool:
         for epoch in range(config.num_epochs):
             optimizer.zero_grad()
             num_cands = config.num_cands_per_epoch
@@ -175,7 +174,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
                 train_logger.info(f"Sampled candidate {k_cand} with op indices: {op_indices.detach().clone().cpu()} and log_prob: {log_prob.item()}")
             top_epoch_cands = GraphPool(pool_size=thresh_idx)
             t1 = time.time()
-            results = pool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
+            results = contextpool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
             t2 = time.time()
             train_logger.info(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
             for op_indices, reward, k_cand in results:
@@ -228,7 +227,7 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
     controller_input = torch.zeros(controller_config.input_dim).to(runtimeconfig.device)
 
     fex_kwargs = {
-        "leaf_dim": fex_config.leaf_dim,
+        "leaf_dim": next(iter(dataloader))[0].shape[-1],
         "tree_structure": self_fex_struct,
     }
     fex_kwargs["num_leaves"] = self_fex_struct.num_leaves
@@ -243,7 +242,7 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
     if num_workers:
         num_processes = min(num_workers, num_processes)
     num_threads = min(num_processes, controller_config.num_cands_per_epoch)
-    train_logger.info(f"Using {num_threads} parallel processes for candidate evaluation.")
+    print(f"Using {num_threads} parallel processes for candidate evaluation.")
 
     context = mp.get_context("spawn")
     gpu_ids = list(range(num_gpus)) if num_gpus > 0 else [None]
@@ -262,18 +261,18 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
                 log_prob = torch.log(chosen_probs).sum()
                 log_probs.append(log_prob)
                 op_indices_list.append(op_indices.detach().clone().cpu())
-                train_logger.info(f"Sampled candidate {k_cand} with op indices: {op_indices.detach().clone().cpu()} and log_prob: {log_prob.item()}")
+                print(f"Sampled candidate {k_cand} with op indices: {op_indices.detach().clone().cpu()} and log_prob: {log_prob.item()}")
             top_epoch_cands = Pool(pool_size=thresh_idx)
             t1 = time.time()
             results = contextpool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
             t2 = time.time()
-            train_logger.info(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
+            print(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
             for op_indices, reward, k_cand in results:
                 forcing_tree = FEX(sample_indices=op_indices, **fex_kwargs)
-                candidate = PoolCandidate(node=forcing_tree, reward=reward, id=int(k_cand + epoch * controller_config.num_cands_per_epoch))
+                candidate = PoolCandidate(tree=forcing_tree, reward=reward, id=int(k_cand + epoch * controller_config.num_cands_per_epoch))
                 top_epoch_cands.add_new(candidate)
 
-            train_logger.debug(f"Epoch {epoch} pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
+            print(f"Epoch {epoch}") #pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
 
             rewards = torch.tensor([cand.reward for cand in top_epoch_cands]).to(runtimeconfig.device)
             log_probs_sorted = [log_probs[cand.id - epoch * controller_config.num_cands_per_epoch] for cand in top_epoch_cands]
@@ -290,58 +289,10 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
             if checkpoint_dir is not None:
                 best_candidates.save_candidates(str(checkpoint_dir / "best_candidates"))
                 best_candidates.visualize_candidates(str(checkpoint_dir / "visualizations"))
-            train_logger.info(f"Controller Epoch {epoch}, Loss: {loss.item()}")
-            train_logger.debug(f"Epoch {epoch}, Reward Threshold for Backprop: {thresh_reward:.4f}")
-            train_logger.debug(f"Epoch {epoch}, Rewards: {rewards.detach().cpu().numpy()}")
-            train_logger.info(f"Epoch {epoch}, Log Probs: {[lp.detach().cpu().numpy() for lp in log_probs_sorted]}")
-            train_logger.debug(f"Epoch {epoch}, Advantage: {advantage.detach().cpu().numpy()}")
+            print(f"Controller Epoch {epoch}, Loss: {loss.item()}")
+            print(f"Epoch {epoch}, Reward Threshold for Backprop: {thresh_reward:.4f}")
+            print(f"Epoch {epoch}, Rewards: {rewards.detach().cpu().numpy()}")
+            print(f"Epoch {epoch}, Log Probs: {[lp.detach().cpu().numpy() for lp in log_probs_sorted]}")
+            print(f"Epoch {epoch}, Advantage: {advantage.detach().cpu().numpy()}")
 
     return best_candidates
-
-
-if __name__ == "__main__":
-    from torch.utils.data import DataLoader, TensorDataset
-    from ..utils.tree_configs import depth_2_tree
-    from ..utils.operations import UNARY_OPS, BINARY_OPS
-
-
-    # fake data and adjacency matrix for testing
-    num_nodes = 100
-    num_timesteps = 10
-    x_data = torch.randn(num_timesteps, num_nodes)
-    dx_dt = torch.randn(num_timesteps, num_nodes)
-    adj_matrix = torch.randint(0, 2, (num_nodes, num_nodes)).float()
-
-    dataloader = DataLoader(TensorDataset(x_data, dx_dt), batch_size=32, shuffle=True)
-
-    input_dim = 20 # Controller input dim is arbitrary
-    num_epochs = 10
-    learning_rate = 0.001
-    controller_config = ControllerConfig(input_dim=input_dim, num_epochs=num_epochs, lr=learning_rate)
-
-    tree_epochs = 5
-    tree_lr = 0.001
-    fex_config = FEXConfig(num_epochs=tree_epochs, lr=tree_lr, max_nodes=adj_matrix.size(0))
-
-
-    num_unary_ops = len(UNARY_OPS)
-    num_binary_ops = len(BINARY_OPS)
-    tree_type = "depth_2"
-    if tree_type == "depth_2":
-        parent_node = depth_2_tree([0, 1, 2])
-        ops_per_node = []
-        leaf_nodes = 0
-        for node in parent_node.preorder_traversal():
-            if node.operation_type == "leaf":
-                leaf_nodes += 1
-            elif node.operation_type == "unary":
-                ops_per_node.append(num_unary_ops)
-            elif node.operation_type == "binary":
-                ops_per_node.append(num_binary_ops)
-
-    fex_config.num_leaves = leaf_nodes
-    fex_config.leaf_dim = 1
-
-    controller = Controller(input_size=input_dim, ops_per_node=ops_per_node, num_trees=controller_config.num_trees, hidden_size=20).to(runtimeconfig.device)
-    train_network_controller(controller, depth_2_tree, dataloader, adj_matrix, controller_config, fex_config)
-
