@@ -13,7 +13,6 @@ from ..utils.pools import GraphPoolCandidate, GraphPool, Pool, PoolCandidate
 from typing import Callable
 import torch
 import torch.multiprocessing as mp
-from multiprocessing.managers import BaseManager
 import torch.optim.lr_scheduler as lr_scheduler
 import os
 import math
@@ -152,7 +151,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
     if num_workers:
         num_processes = min(num_workers, num_processes)
     num_threads = min(num_processes, config.num_cands_per_epoch)
-    train_logger.info(f"Using {num_threads} parallel processes for candidate evaluation.")
+    print(f"Using {num_threads} parallel processes for candidate evaluation.")
 
     context = mp.get_context("spawn")
     gpu_ids = list(range(num_gpus)) if num_gpus > 0 else [None]
@@ -171,19 +170,18 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
                 log_prob = torch.log(chosen_probs).sum()
                 log_probs.append(log_prob)
                 op_indices_list.append(op_indices.detach().clone().cpu())
-                train_logger.info(f"Sampled candidate {k_cand} with op indices: {op_indices.detach().clone().cpu()} and log_prob: {log_prob.item()}")
             top_epoch_cands = GraphPool(pool_size=thresh_idx)
             t1 = time.time()
             results = contextpool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
             t2 = time.time()
-            train_logger.info(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
+            print(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
             for op_indices, reward, k_cand in results:
                 inter_tree = FEX(sample_indices=op_indices[len(self_ops_per_node):len(self_ops_per_node) + len(inter_ops_per_node)], **inter_fex_kwargs)
                 forcing_tree = FEX(sample_indices=op_indices[:len(self_ops_per_node)], **fex_kwargs)
                 candidate = GraphPoolCandidate(inter_tree=inter_tree, forcing_tree=forcing_tree, reward=reward, id=int(k_cand + epoch * config.num_cands_per_epoch))
                 top_epoch_cands.add_new(candidate)
 
-            train_logger.debug(f"Epoch {epoch} pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
+            print(f"Epoch {epoch} pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
 
             rewards = torch.tensor([cand.reward for cand in top_epoch_cands]).to(runtimeconfig.device)
             log_probs_sorted = [log_probs[cand.id - epoch * config.num_cands_per_epoch] for cand in top_epoch_cands]
@@ -200,11 +198,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
             if checkpoint_dir is not None:
                 best_candidates.save_candidates(str(checkpoint_dir / "best_candidates"))
                 best_candidates.visualize_candidates(str(checkpoint_dir / "visualizations"))
-            train_logger.info(f"Controller Epoch {epoch}, Loss: {loss.item()}")
-            train_logger.debug(f"Epoch {epoch}, Reward Threshold for Backprop: {thresh_reward:.4f}")
-            train_logger.debug(f"Epoch {epoch}, Rewards: {rewards.detach().cpu().numpy()}")
-            train_logger.info(f"Epoch {epoch}, Log Probs: {[lp.detach().cpu().numpy() for lp in log_probs_sorted]}")
-            train_logger.debug(f"Epoch {epoch}, Advantage: {advantage.detach().cpu().numpy()}")
+
 
     return best_candidates
 
@@ -261,7 +255,6 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
                 log_prob = torch.log(chosen_probs).sum()
                 log_probs.append(log_prob)
                 op_indices_list.append(op_indices.detach().clone().cpu())
-                print(f"Sampled candidate {k_cand} with op indices: {op_indices.detach().clone().cpu()} and log_prob: {log_prob.item()}")
             top_epoch_cands = Pool(pool_size=thresh_idx)
             t1 = time.time()
             results = contextpool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
@@ -272,7 +265,7 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
                 candidate = PoolCandidate(tree=forcing_tree, reward=reward, id=int(k_cand + epoch * controller_config.num_cands_per_epoch))
                 top_epoch_cands.add_new(candidate)
 
-            print(f"Epoch {epoch}") #pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
+            print(f"Epoch {epoch}, pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
 
             rewards = torch.tensor([cand.reward for cand in top_epoch_cands]).to(runtimeconfig.device)
             log_probs_sorted = [log_probs[cand.id - epoch * controller_config.num_cands_per_epoch] for cand in top_epoch_cands]
@@ -289,10 +282,6 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
             if checkpoint_dir is not None:
                 best_candidates.save_candidates(str(checkpoint_dir / "best_candidates"))
                 best_candidates.visualize_candidates(str(checkpoint_dir / "visualizations"))
-            print(f"Controller Epoch {epoch}, Loss: {loss.item()}")
-            print(f"Epoch {epoch}, Reward Threshold for Backprop: {thresh_reward:.4f}")
-            print(f"Epoch {epoch}, Rewards: {rewards.detach().cpu().numpy()}")
-            print(f"Epoch {epoch}, Log Probs: {[lp.detach().cpu().numpy() for lp in log_probs_sorted]}")
-            print(f"Epoch {epoch}, Advantage: {advantage.detach().cpu().numpy()}")
+
 
     return best_candidates

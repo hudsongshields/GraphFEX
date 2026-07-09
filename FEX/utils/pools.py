@@ -56,7 +56,7 @@ class Pool():
             torch.save(self._build_fex_checkpoint(cand.tree), target / f"forcing_tree{cand.id}.pt")
     
 
-
+from threading import Lock
 @dataclass
 class GraphPoolCandidate:
     inter_tree: object

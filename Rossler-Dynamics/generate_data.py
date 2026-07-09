@@ -24,9 +24,9 @@ def add_gaussian_noise_db(data: torch.Tensor, snr_db: float):
 def make_data(num_samples: int, adjacency: torch.Tensor, snr: int = None) -> tuple[torch.Tensor, torch.Tensor]:
     num_nodes = adjacency.size(0)
     states = torch.empty(num_samples, num_nodes, 3, device=adjacency.device)
-    states[..., 0].uniform_(-2.0, 2.0)
-    states[..., 1].uniform_(-8.0, 4.0)
-    states[..., 2].uniform_(0.0, 5.0)
+    states[..., 0].uniform_(-10.0, 10.0)
+    states[..., 1].uniform_(-10.0, 10.0)
+    states[..., 2].uniform_(-2.0, 4.0)
 
     x_i = states[..., 0]
     y_i = states[..., 1]

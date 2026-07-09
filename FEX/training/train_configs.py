@@ -59,7 +59,7 @@ class ControllerConfig():
 @dataclass
 class FEXConfig():
     target_dim: int = 0
-    expression_threshold: float = 1e-4
+    expression_threshold: float = 1e-3
 
 
     lr: float = 0.02

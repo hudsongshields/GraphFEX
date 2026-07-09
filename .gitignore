@@ -25,3 +25,5 @@ HR/inter_test
 HR/sigmoid
 HR/default
 HR/logs*
+
+HR/data/HR_timeseries_BA_deg_10_0_SNR_40.csv
