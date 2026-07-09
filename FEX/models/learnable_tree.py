@@ -70,9 +70,7 @@ class FEX(nn.Module):
 
 
     def forward(self, x: torch.Tensor):
-        def compute_node(node: Node, depth: int = 0):
-            indent = "  " * depth
-            tree_logger.debug(f"{indent}Entering {node.operation_type}")
+        def compute_node(node: Node):
 
             if node.operation_type == "leaf":
                 out = self.leaf_mlps[node.leaf_idx](x)
@@ -81,15 +79,14 @@ class FEX(nn.Module):
                 if node.left.operation_type == "leaf":
                     out = self.leaf_mlps[node.left.leaf_idx](x, unary_op=node.operation.op)
                 else:
-                    child = compute_node(node.left, depth + 1)
+                    child = compute_node(node.left)
                     out = node.operation(child)
 
             elif node.operation_type == "binary":
-                left_val = compute_node(node.left, depth + 1)
-                right_val = compute_node(node.right, depth + 1)
+                left_val = compute_node(node.left)
+                right_val = compute_node(node.right)
                 out = node.operation(left_val, right_val)
 
-            tree_logger.debug(f"{indent}Returning from {node.operation_type} -> shape {out.shape}")
             return out
 
         return compute_node(self.parent_node)
