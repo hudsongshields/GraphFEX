@@ -25,6 +25,7 @@ def make_data(
     num_samples: int,
     adjacency: torch.Tensor,
     snr: int = None,
+    coupling=0.15
 ):
     num_nodes = adjacency.size(0)
     device = adjacency.device
@@ -40,7 +41,7 @@ def make_data(
     sigma = 10.0
     rho = 28.0
     b = 8.0 / 3.0
-    coupling_strength = 0.08
+    coupling_strength = coupling
 
     for t in range(num_samples):
         x_i = states[t, :, 0]

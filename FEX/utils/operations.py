@@ -33,6 +33,9 @@ def safe_reciprocal(x):
     denom = torch.where(torch.abs(x) < EPS, torch.full_like(x, EPS), x)
     return torch.reciprocal(denom)
 
+def sin(x):
+    return torch.sin(x)
+
 
 def add(x, y):
     return torch.add(x, y)
@@ -50,6 +53,7 @@ def safe_div(x, y):
     denom = torch.where(torch.abs(y) < EPS, torch.full_like(y, EPS), y)
     return torch.div(x, denom)
 
+
 UNARY_OPS = [
     identity,
     square,
@@ -58,6 +62,7 @@ UNARY_OPS = [
     safe_exp,
     sigmoid,
     safe_reciprocal,
+    # sin,
 ]
 
 BINARY_OPS = [
