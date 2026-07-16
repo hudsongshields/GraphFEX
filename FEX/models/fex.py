@@ -12,22 +12,23 @@ class CoupledFEX():
     def __init__(self, self_fex_struct, inter_fex_struct, target_dim, *, 
             controller_lr=0.005, controller_epochs=200, cands_per_cycle=10, controller_threshold=0.4, poolsize=10, epsilon_greedy=0.2,
             num_fex_epochs=80, bfgs_epochs=20, self_lr=0.2, inter_lr=0.2, bfgs_lr=0.5, 
-            finetune_epochs=2000, finetune_lr=2e-3, expression_threshold=0.01,
+            finetune_epochs=2000, finetune_lr=2e-3, expression_threshold=0.001,
             device='cpu'
         ):
         self.self_fex_struct = get_tree_config(self_fex_struct)
         self.inter_fex_struct = get_tree_config(inter_fex_struct)
-        self.target_dim = target_dim
         self.finetune_epochs = finetune_epochs
         self.finetune_lr = finetune_lr
         
         self.fex_config = FEXConfig(
+            target_dim=target_dim,
             lr=self_lr,
             inter_lr=inter_lr,
             num_epochs=num_fex_epochs,
             bfgs_epochs=bfgs_epochs,
             bfgs_lr=bfgs_lr,
             expression_threshold=expression_threshold,
+
         )
         self.controller_config = ControllerConfig(
             lr=controller_lr,
@@ -50,7 +51,7 @@ class CoupledFEX():
 
 
 
-    def fit(self, data, target, adjacency, batch_size=64, num_workers=2):
+    def fit(self, data, target, adjacency, batch_size=64, num_workers=2, finetune_bs=512):
         dataloader = DataLoader(
             TensorDataset(data, target),
             batch_size=batch_size,
@@ -62,11 +63,17 @@ class CoupledFEX():
         self.fex_config.lr = self.finetune_lr
         self.fex_config.inter_lr = self.finetune_lr
         self.fex_config.bfgs_epochs = 0
+        if finetune_bs:
+            dataloader= DataLoader(
+                TensorDataset(data, target),
+                batch_size=finetune_bs,
+                shuffle=True,
+                pin_memory=self.device == "cuda",
+            )
         for candidate in best_candidates:
-            self_fex = candidate.forcing_tree
-            inter_fex = candidate.inter_tree
-            loss = train_network_fex(self_fex, inter_fex, dataloader, adjacency, self.fex_config, verbose=True, log_every=100)
+            loss = train_network_fex(candidate.forcing_tree, candidate.inter_tree, dataloader, adjacency, self.fex_config, verbose=True, log_every=100)
             candidate.reward = 1 / (1 + loss)
+
         self.best_model = max(best_candidates, key=lambda c: c.reward)
 
     

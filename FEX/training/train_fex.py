@@ -30,19 +30,6 @@ def train_network_fex(
     adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr, betas=(0.95, 0.999))
     adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr)
 
-    lr_decay = config.lr_decay
-    if lr_decay > 0:
-        scheduler_self = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            adam_optim_self,
-            T_0=max(int(config.num_epochs * config.pct_cosine_restart), 1),
-            eta_min=0.0
-        )
-        scheduler_inter = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            adam_optim_inter,
-            T_0=max(int(config.num_epochs * config.pct_cosine_restart), 1),
-            eta_min=0.0
-        )
-
 
     # Precompute edge indices - used by both group_loss
     adj_matrix = adj_matrix.to(device)
@@ -56,7 +43,7 @@ def train_network_fex(
     scatter_idx = (nodes.unsqueeze(1) == group_indices.unsqueeze(0)).int().argmax(dim=1)
 
     best_epoch_loss = float('inf')
-    if verbose:
+    if log_every > 0:
         print(f'Initial Equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}')
 
     inter_dynam_tree.train()

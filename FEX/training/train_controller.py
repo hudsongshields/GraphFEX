@@ -176,7 +176,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
             t2 = time.time()
             print(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
             for op_indices, reward, k_cand in results:
-                inter_tree = FEX(sample_indices=op_indices[len(self_ops_per_node):len(self_ops_per_node) + len(inter_ops_per_node)], **inter_fex_kwargs)
+                inter_tree = FEX(sample_indices=op_indices[len(self_ops_per_node):], **inter_fex_kwargs)
                 forcing_tree = FEX(sample_indices=op_indices[:len(self_ops_per_node)], **fex_kwargs)
                 candidate = GraphPoolCandidate(inter_tree=inter_tree, forcing_tree=forcing_tree, reward=reward, id=int(k_cand + epoch * config.num_cands_per_epoch))
                 top_epoch_cands.add_new(candidate)

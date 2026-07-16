@@ -40,7 +40,7 @@ class LeafMLP(nn.Module):
         terms = [
             f"{float(weight.detach()):.4f}*x[{index}]"
             for index, weight in enumerate(self.logits)
-            if abs(float(weight.detach())) >= 1e-6
+            if abs(float(weight.detach())) >= 1e-4
         ]
         terms.append(f"{float(self.bias.detach()):.4f}")
         return " + ".join(terms)
@@ -203,7 +203,7 @@ class FEX(nn.Module):
     def __str__(self):
         return self.simplified_expression(threshold=self.expr_thresh)
 
-    def symbolic_expression(self, variable_names=None, digits: int = 4, threshold: float = 1e-6):
+    def symbolic_expression(self, variable_names=None, digits: int = 4):
         """Build the paper-style elementwise leaf expression with SymPy."""
         import sympy as sp
 
@@ -220,7 +220,7 @@ class FEX(nn.Module):
 
         def rounded_parameter(value):
             number = round(float(value.detach().item()), digits)
-            return sp.Float(0.0 if abs(number) < threshold else number)
+            return sp.Float(0.0 if abs(number) < self.threshold else number)
 
         def apply_unary(op_name, value):
             if op_name == "identity":
@@ -241,10 +241,10 @@ class FEX(nn.Module):
 
         def build_leaf(leaf_idx, op_name="identity"):
             leaf = self.leaf_mlps[leaf_idx]
-            expression = rounded_parameter(leaf.bias)
+            self.threshold = rounded_parameter(leaf.bias)
             for coefficient, symbol in zip(leaf.logits, symbols):
-                expression += rounded_parameter(coefficient) * apply_unary(op_name, symbol)
-            return expression
+                self.threshold += rounded_parameter(coefficient) * apply_unary(op_name, symbol)
+            return self.threshold
 
         def build(node):
             if node.operation_type == "leaf":
@@ -276,13 +276,13 @@ class FEX(nn.Module):
         retained_terms = []
         for term in sp.Add.make_args(expanded):
             coefficient, _ = term.as_coeff_Mul()
-            if not coefficient.is_number or abs(float(coefficient)) >= threshold:
+            if not coefficient.is_number or abs(float(coefficient)) >= self.threshold:
                 retained_terms.append(term)
 
         return sp.simplify(sp.Add(*retained_terms))
 
-    def simplified_expression(self, variable_names=None, digits: int = 4, threshold: float = 1e-6):
-        return str(self.symbolic_expression(variable_names, digits, threshold))
+    def simplified_expression(self, variable_names=None, digits: int = 4):
+        return str(self.symbolic_expression(variable_names, digits))
     
     """ external member functions """
     def visualize_tree(self, directory: str = "fex_tree_viz", clear_directory: bool = True):

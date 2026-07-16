@@ -27,7 +27,7 @@ def test_total_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_matrix):
     loss = F.mse_loss(pred, batch_dy_val[:, :, 0])
     return loss
 
-def total_loss(batch_x, batch_dy_val, self_tree, inter_tree=None, adj_mat_nodes=None, adj_mat_edges=None, scatter_idx=None):
+def total_loss(batch_x, batch_dy_val, self_tree, inter_tree=None, adj_mat_nodes=None, adj_mat_edges=None, scatter_idx=None, norm_coeff=1.0):
 
     B = batch_x.size(0)
     G = batch_x.size(1)
@@ -54,7 +54,7 @@ def total_loss(batch_x, batch_dy_val, self_tree, inter_tree=None, adj_mat_nodes=
         interaction_out = torch.zeros(B, G, 1, device=batch_x.device)
         interaction_out.scatter_add_(1, local_idx, inter_out)
 
-        batch_dy = forcing_out + interaction_out
+        batch_dy = forcing_out + (interaction_out * norm_coeff)
     else:
         batch_dy = forcing_out
         
@@ -64,3 +64,21 @@ def total_loss(batch_x, batch_dy_val, self_tree, inter_tree=None, adj_mat_nodes=
         loss = torch.tensor(float('inf'), device=batch_x.device)
 
     return loss
+
+# with this approach, we may group nodes together, and compute only the interactions of the nodes within that group
+def group_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_mat_nodes, adj_mat_edges, scatter_idx, num_groups):
+    group_indices = torch.randperm(batch_x.size(1), device=batch_x.device)
+    group_indices = group_indices.chunk(num_groups)
+
+    normalization_coeff = (batch_x.size(1) - 1) / (num_groups - 1)
+
+    total_loss = 0.0
+    for group in group_indices:
+        group_x = batch_x[:, group, :]
+        group_dy_val = batch_dy_val[:, group, :]
+        group_adj_nodes = adj_mat_nodes[group]
+        group_adj_edges = adj_mat_edges[group]
+        group_scatter_idx = scatter_idx[group]
+
+        total_loss += total_loss(group_x, group_dy_val, self_tree, inter_tree, group_adj_nodes, group_adj_edges, group_scatter_idx, norm_coeff=normalization_coeff)
+    return total_loss
