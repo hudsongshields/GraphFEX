@@ -68,6 +68,6 @@ UNARY_OPS = [
 BINARY_OPS = [
     add,
     mul,
-    sub,
+    # sub,
     safe_div,
 ]

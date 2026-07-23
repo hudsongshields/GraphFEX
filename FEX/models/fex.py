@@ -12,7 +12,7 @@ class CoupledFEX():
     def __init__(self, self_fex_struct, inter_fex_struct, target_dim, *, 
             controller_lr=0.005, controller_epochs=200, cands_per_cycle=10, controller_threshold=0.4, poolsize=10, epsilon_greedy=0.2,
             num_fex_epochs=80, bfgs_epochs=20, self_lr=0.2, inter_lr=0.2, bfgs_lr=0.5, 
-            finetune_epochs=2000, finetune_lr=2e-3, expression_threshold=0.001,
+            finetune_epochs=2000, finetune_lr=2e-2, expression_threshold=0.001,
             device='cpu'
         ):
         self.self_fex_struct = get_tree_config(self_fex_struct)
@@ -51,7 +51,7 @@ class CoupledFEX():
 
 
 
-    def fit(self, data, target, adjacency, batch_size=64, num_workers=2, finetune_bs=512):
+    def fit(self, data, target, adjacency, batch_size=64, num_workers=2, finetune_bs=128):
         dataloader = DataLoader(
             TensorDataset(data, target),
             batch_size=batch_size,
@@ -76,6 +76,33 @@ class CoupledFEX():
 
         self.best_model = max(best_candidates, key=lambda c: c.reward)
 
+    def finetune(self, data, target, adjacency, finetune_bs=64):
+        if self.best_model is None:
+            raise ValueError("No best model found. Please fit the model first.")
+
+        self.fex_config.num_epochs = self.finetune_epochs
+        self.fex_config.lr = self.finetune_lr
+        self.fex_config.inter_lr = self.finetune_lr
+        self.fex_config.bfgs_epochs = 0
+
+        dataloader = DataLoader(
+            TensorDataset(data, target),
+            batch_size=finetune_bs,
+            shuffle=True,
+            pin_memory=self.device == "cuda",
+        )
+
+        loss = train_network_fex(
+            self.best_model.forcing_tree,
+            self.best_model.inter_tree,
+            dataloader,
+            adjacency,
+            self.fex_config,
+            verbose=True,
+            log_every=100
+        )
+        self.best_model.reward = 1 / (1 + loss)
+
     
     def predict(self, x, adjacency):
         self_fex = self.best_model.forcing_tree.to(self.device)
@@ -96,11 +123,11 @@ class CoupledFEX():
             inter_predictions = inter_fex(inter_input).squeeze(-1)
             predictions.index_add_(0, self_nodes, inter_predictions)
 
-        return predictions
+        return predictions.unsqueeze(-1)
     
     
     def __str__(self):
-        return f"FEX(self_fex_struct={self.best_model.forcing_tree} \ninter_fex_struct={self.best_model.inter_fex})"
+        return f"FEX(self_fex={self.best_model.forcing_tree} \ninter_fex={self.best_model.inter_tree})"
     
 class SingleFEX():
     def __init__(self, self_fex_struct: str, target_dim, *,
@@ -152,10 +179,24 @@ class SingleFEX():
         self.fex_config.inter_lr = self.finetune_lr
         for candidate in best_candidates:
             self_fex = candidate.tree
-            loss = train_fex(self_fex, dataloader, self.fex_config, self.device, verbose=True)
+            loss = train_fex(self_fex, dataloader, self.fex_config, self.device, every_n_epochs=100)
             updated_reward = 1/(1 + loss)
             candidate.reward = updated_reward
         self.best_model = max(best_candidates, key=lambda c: c.reward)
+
+    def finetune(self, data, target, batch_size=64):
+        dataloader = DataLoader(
+            TensorDataset(data, target),
+            batch_size=batch_size,
+            shuffle=True,
+            pin_memory=self.device == "cuda",
+        )
+        self.fex_config.num_epochs = self.num_finetune_epochs
+        self.fex_config.bfgs_epochs = 0
+        self.fex_config.lr = self.finetune_lr
+        self.fex_config.inter_lr = self.finetune_lr
+        self_fex = self.best_model.tree
+        train_fex(self_fex, dataloader, self.fex_config, self.device, every_n_epochs=100)
 
     def predict(self, x):
         x = x.to(self.device)

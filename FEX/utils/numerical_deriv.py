@@ -1,6 +1,6 @@
 import torch
 
-def NumericalDeriv(timeseries, dt):
+def five_point(timeseries, dt):
     return ((
         timeseries[:-4, :, :]         # t-2
         - 8 * timeseries[1:-3, :, :]  # t-1

@@ -6,8 +6,9 @@ from .train_configs import FEXConfig, runtimeconfig
 import torch
 import torch.nn.functional as F
 import math
-from .loss_funcs import total_loss
+from .loss_funcs import group_loss, total_loss
 from .tree_helpers import copy_fex_state_, get_noise_stds
+
 
 def train_network_fex(
     forcing_tree: FEX,
@@ -43,8 +44,6 @@ def train_network_fex(
     scatter_idx = (nodes.unsqueeze(1) == group_indices.unsqueeze(0)).int().argmax(dim=1)
 
     best_epoch_loss = float('inf')
-    if log_every > 0:
-        print(f'Initial Equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}')
 
     inter_dynam_tree.train()
     forcing_tree.train()
@@ -82,21 +81,15 @@ def train_network_fex(
         if mean_epoch_pred_loss < best_epoch_loss:
             best_epoch_loss = mean_epoch_pred_loss
 
-        if verbose:
-            print(f"Adam Epoch {epoch+1}/{config.num_epochs}, PredLoss: {mean_epoch_pred_loss:.4f}")
-            print(f'Equation Forcing Tree: {forcing_tree} \n Inter Tree: {inter_dynam_tree}')
+
         if log_every > 0 and (
-            epoch == 0
-            or (epoch + 1) % log_every == 0
+            (epoch + 1) % log_every == 0
             or epoch + 1 == config.num_epochs
         ):
-            self_lr = adam_optim_self.param_groups[0]["lr"]
-            inter_lr = adam_optim_inter.param_groups[0]["lr"]
+
             print(
                 f"Adam epoch {epoch + 1:>5}/{config.num_epochs}: "
                 f"pred_loss={mean_epoch_pred_loss:.8e}, "
-                # f"self_lr={self_lr:.4g}, inter_lr={inter_lr:.4g}, "
-                f"forcing tree: {forcing_tree} \n interaction tree: {inter_dynam_tree}"
             )
     
     if config.bfgs_epochs > 0:
@@ -156,23 +149,24 @@ def train_network_fex(
         ]
 
         bfgs_loss_val = sum(final_pred_losses) / len(final_pred_losses) 
-        if verbose:
-            print(
-                f"LBFGS refinement: max_iter={config.bfgs_epochs}, loss={bfgs_loss_val:.8e}, "
-                f"lr={config.bfgs_lr}, starting_pred_loss={best_epoch_loss:.8e}"
-            )
         if bfgs_loss_val < best_epoch_loss:
             best_epoch_loss = bfgs_loss_val
+    
+    if log_every > 0:
+        print(
+            f"loss={best_epoch_loss:.8e}"
+            f"FEX sequence: {str(forcing_tree.__str__())} FEX operator sequence: {forcing_tree.sample_indices}\n"
+            f"Inter FEX sequence: {str(inter_dynam_tree.__str__())} Inter FEX operator sequence: {inter_dynam_tree.sample_indices}\n"
+        )
 
     return float(best_epoch_loss)
 
-def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.device, verbose=False, every_n_epochs=100):
+def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.device, verbose=False, every_n_epochs=0):
     forcing_tree.train()
     forcing_tree = forcing_tree.to(device)
     forcing_tree_params = forcing_tree.all_parameters()
     optim = torch.optim.Adam(forcing_tree_params, lr=config.lr)
 
-    # train_logger = runtimeconfig.train_logger if verbose else None
 
     best_epoch_loss = float('inf')
     for epoch in range(config.num_epochs):
@@ -197,9 +191,8 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.
         if epoch_loss / num_batches < best_epoch_loss:
             best_epoch_loss = epoch_loss / max(1, num_batches)
             
-        if verbose and epoch % every_n_epochs == 0:
-            print(f"Epoch {epoch}, Loss: {epoch_loss/max(1, num_batches):.4f}")
-            print(f"FEX sequence: {str(forcing_tree.__str__())}")
+        if every_n_epochs and (epoch+1) % every_n_epochs == 0:
+            print(f"Epoch {epoch+1}, Loss: {epoch_loss/max(1, num_batches):.4f}")
 
     if config.bfgs_epochs > 0:
         all_parameters = list(forcing_tree.all_parameters())
@@ -254,11 +247,13 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.
                 for batch_x, batch_dy_val in bfgs_batches
             ]
         bfgs_loss_val = sum(final_pred_losses) / len(final_pred_losses) 
-        if verbose:
-            print(f"FEX string representation after BFGS optim: {forcing_tree}")
-            print(f"Loss after BFGS optim: {bfgs_loss_val}")
         if best_epoch_loss > bfgs_loss_val:
             best_epoch_loss = bfgs_loss_val
+
+    if every_n_epochs > 0:
+        print(f"Final FEX: {forcing_tree}")
+        print(f"Final Loss: {best_epoch_loss}")
+        print(f"fex operator sequence: {forcing_tree.sample_indices}")
     return best_epoch_loss
         
 

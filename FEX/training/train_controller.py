@@ -18,9 +18,6 @@ import os
 import math
 import time
 
-import logging
-train_logger = logging.getLogger("train_logger") 
-train_logger.setLevel(logging.INFO)
 
 self_ops_per_node = None
 inter_ops_per_node = None
@@ -33,17 +30,13 @@ fex_config_global = None
 
 
 def eval_candidate(k_cand, gpu_id, op_indices):
-    logger = train_logger
+
     if gpu_id is not None and torch.cuda.is_available():
         device = torch.device(f"cuda:{gpu_id}")
-        logger.info(f"Evaluating candidate {k_cand} on GPU {gpu_id}")
+        print(f"Evaluating candidate {k_cand} on GPU {gpu_id}")
     else:
         device = torch.device("cpu")
-        logger.info(f"Evaluating candidate {k_cand} on CPU")
-    if k_cand == 0:
-        verbose = True
-        logger.info(f"Evaluating candidate {k_cand} with op indices: {op_indices}")
-    else: verbose = False
+        print(f"Evaluating candidate {k_cand} on CPU")
 
     forcing_op_indices = op_indices[:len(self_ops_per_node)]
     inter_dynam_op_indices = None
@@ -63,7 +56,6 @@ def eval_candidate(k_cand, gpu_id, op_indices):
             adj_matrix_global,
             config=fex_config_global,
             device=device,
-            verbose=False,
         )
     else:
         score = train_fex(
@@ -71,7 +63,6 @@ def eval_candidate(k_cand, gpu_id, op_indices):
             dataloader_global,
             config=fex_config_global,
             device=device,
-            verbose=False,
         )
     score = score.detach().item() if isinstance(score, torch.Tensor) else float(score)
     if not math.isfinite(score):
@@ -89,8 +80,6 @@ def eval_candidate(k_cand, gpu_id, op_indices):
         inter_fex = inter_fex.cpu()
 
     forcing_fex = forcing_fex.cpu()
-    if k_cand == -1:
-        logger.info(f"Sampled candidate {k_cand} with score {score:.4f}\n self dynamics: {forcing_fex}\n inter dynamics: {inter_fex}")
     return op_indices, reward, k_cand
 
 
@@ -107,12 +96,9 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
     adj_matrix_global = adj_matrix
     fex_config_global = fex_config
 
-    if logger_path:
-        runtimeconfig.CreateLogger(logger_path, name="train_logger", mode="a")
 
 
 def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, checkpoint_dir: Path = None, num_workers: int = 2) -> GraphPool:
-    train_logger = runtimeconfig.train_logger
     num_gpus = torch.cuda.device_count()
     
     global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global
@@ -145,7 +131,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
     slurm_cpus = os.getenv("SLURM_CPUS_PER_TASK")
     if slurm_cpus is not None:
         num_processes = int(slurm_cpus)
-        train_logger.info(f"Detected SLURM environment with {num_processes} CPUs allocated for this task")
+        print(f"Detected SLURM environment with {num_processes} CPUs allocated for this task")
     else:
         num_processes = mp.cpu_count()
     if num_workers:
@@ -204,7 +190,6 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
 
 # for no inter tree, just self fex
 def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config: ControllerConfig, fex_config: FEXConfig, checkpoint_dir=None, num_workers:int = 1):
-    train_logger = runtimeconfig.train_logger
     num_gpus = torch.cuda.device_count()
     
     global self_ops_per_node, fex_kwargs, dataloader_global, fex_config_global
@@ -230,7 +215,7 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
     slurm_cpus = os.getenv("SLURM_CPUS_PER_TASK")
     if slurm_cpus is not None:
         num_processes = int(slurm_cpus)
-        train_logger.info(f"Detected SLURM environment with {num_processes} CPUs allocated for this task")
+        print(f"Detected SLURM environment with {num_processes} CPUs allocated for this task")
     else:
         num_processes = mp.cpu_count()
     if num_workers:
