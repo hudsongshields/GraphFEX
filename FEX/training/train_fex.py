@@ -10,6 +10,12 @@ from .loss_funcs import group_loss, total_loss
 from .tree_helpers import copy_fex_state_, get_noise_stds
 
 
+def _expression_summary(tree: FEX):
+    if hasattr(tree, "expression_summary"):
+        return tree.expression_summary()
+    return str(tree)
+
+
 def train_network_fex(
     forcing_tree: FEX,
     inter_dynam_tree: FEX,
@@ -155,8 +161,8 @@ def train_network_fex(
     if log_every > 0:
         print(
             f"loss={best_epoch_loss:.8e}"
-            f"FEX sequence: {str(forcing_tree.__str__())} FEX operator sequence: {forcing_tree.sample_indices}\n"
-            f"Inter FEX sequence: {str(inter_dynam_tree.__str__())} Inter FEX operator sequence: {inter_dynam_tree.sample_indices}\n"
+            f"FEX sequence: {_expression_summary(forcing_tree)} FEX operator sequence: {forcing_tree.sample_indices}\n"
+            f"Inter FEX sequence: {_expression_summary(inter_dynam_tree)} Inter FEX operator sequence: {inter_dynam_tree.sample_indices}\n"
         )
 
     return float(best_epoch_loss)
@@ -251,7 +257,7 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.
             best_epoch_loss = bfgs_loss_val
 
     if every_n_epochs > 0:
-        print(f"Final FEX: {forcing_tree}")
+        print(f"Final FEX: {_expression_summary(forcing_tree)}")
         print(f"Final Loss: {best_epoch_loss}")
         print(f"fex operator sequence: {forcing_tree.sample_indices}")
     return best_epoch_loss

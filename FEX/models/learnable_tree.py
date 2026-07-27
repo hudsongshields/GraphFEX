@@ -205,6 +205,10 @@ class FEX(nn.Module):
     def __str__(self):
         return self.simplified_expression()
 
+    def expression_summary(self):
+        leaf_expressions = [str(leaf) for leaf in self.leaf_mlps]
+        return self.parent_node.__str__(leaf_expressions)
+
     def symbolic_expression(self, variable_names=None):
         """Build the paper-style elementwise leaf expression with SymPy."""
         import sympy as sp
