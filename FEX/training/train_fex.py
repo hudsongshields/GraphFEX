@@ -22,6 +22,8 @@ def train_network_fex(
     dataloader,
     adj_matrix,
     config: FEXConfig,
+    *,
+    num_groups=1,
     device=runtimeconfig.device,
     verbose: bool = False,
     log_every: int = 0,
@@ -68,7 +70,10 @@ def train_network_fex(
             adam_optim_self.zero_grad()
             adam_optim_inter.zero_grad()
 
-            pred_batch_loss = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
+            if num_groups > 1:
+                pred_batch_loss = group_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx, num_groups)
+            else:
+                pred_batch_loss = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
             if not torch.isfinite(pred_batch_loss):
                 continue
             batch_loss = pred_batch_loss

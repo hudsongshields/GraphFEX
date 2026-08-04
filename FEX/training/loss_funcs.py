@@ -49,32 +49,37 @@ def total_loss(batch_x, batch_dy_val, self_tree, inter_tree=None, adj_mat_nodes=
 
 
 def group_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_mat_nodes, adj_mat_edges, scatter_idx, num_groups):
+    device = batch_x.device
     num_nodes = batch_x.size(1)
-    groups = torch.randperm(num_nodes, device=batch_x.device).chunk(num_groups)
 
-    adj_mat_nodes = adj_mat_nodes.to(device=batch_x.device, dtype=torch.long)
-    adj_mat_edges = adj_mat_edges.to(device=batch_x.device, dtype=torch.long)
-    scatter_idx = scatter_idx.to(device=batch_x.device, dtype=torch.long)
+    if num_nodes % num_groups != 0:
+        raise ValueError("num_nodes must be divisible by num_groups")
 
-    group_losses = []
-    for group in groups:
-        group_size = group.numel()
-        group_x = batch_x[:, group, :]
-        group_dy = batch_dy_val[:, group, :]
+    group_size = num_nodes // num_groups
 
-        global_to_local = torch.full((num_nodes,), -1, device=batch_x.device, dtype=torch.long)
-        global_to_local[group] = torch.arange(group_size, device=batch_x.device)
+    adj_mat_nodes = adj_mat_nodes.to(device=device, dtype=torch.long)
+    adj_mat_edges = adj_mat_edges.to(device=device, dtype=torch.long)
+    scatter_idx = scatter_idx.to(device=device, dtype=torch.long)
 
-        edge_mask = (global_to_local[adj_mat_nodes] >= 0) & (global_to_local[adj_mat_edges] >= 0)
-        group_adj_nodes = global_to_local[adj_mat_nodes[edge_mask]]
-        group_adj_edges = global_to_local[adj_mat_edges[edge_mask]]
-        group_scatter_idx = global_to_local[scatter_idx[edge_mask]]
+    # Randomly assign each node to a group
+    permutation = torch.randperm(num_nodes, device=device)
 
-        norm_coeff = (num_nodes - 1) / (group_size - 1) if group_size > 1 else 1.0
-        group_losses.append(total_loss(
-            group_x, group_dy, self_tree, inter_tree,
-            group_adj_nodes, group_adj_edges, group_scatter_idx,
-            norm_coeff=norm_coeff
-        ))
+    group_id = torch.empty(num_nodes, device=device, dtype=torch.long)
+    group_id[permutation] = (torch.arange(num_nodes, device=device) // group_size)
 
-    return torch.stack(group_losses).mean()
+    # Retain only edges whose endpoints belong to the same group
+    edge_mask = (group_id[adj_mat_nodes] == group_id[adj_mat_edges])
+
+    group_adj_nodes = adj_mat_nodes[edge_mask]
+    group_adj_edges = adj_mat_edges[edge_mask]
+    group_scatter_idx = scatter_idx[edge_mask]
+
+    return total_loss(
+        batch_x,
+        batch_dy_val,
+        self_tree,
+        inter_tree,
+        group_adj_nodes,
+        group_adj_edges,
+        group_scatter_idx,
+    )

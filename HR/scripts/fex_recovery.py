@@ -30,15 +30,15 @@ def main():
     timeseries, t_derivs = make_timeseries(num_samples=timesteps, adjacency=adj_matrix, snr=args.snr)
 
     if args.target_dim is None or args.target_dim == 0:
-        dimx_fex = fex.CoupledFEX('depth_3_leaves_4_config', 'depth_2_tree_config', 0, controller_epochs=300, controller_lr=0.005, finetune_epochs=5000, finetune_lr=0.002,  num_fex_epochs=120, self_lr=0.02, inter_lr=0.02, bfgs_epochs=30, bfgs_lr=0.6, poolsize=8, device=device, expression_threshold=0.001)
+        dimx_fex = fex.CoupledFEX('depth_3_leaves_4_config', 'depth_2_tree_config', 0, controller_epochs=300, controller_lr=0.005, finetune_epochs=20000, finetune_lr=0.0008, num_fex_epochs=120, self_lr=0.02, inter_lr=0.02, bfgs_epochs=30, bfgs_lr=0.6, poolsize=8, device=device, expression_threshold=0.001)
         dimx_fex.fit(timeseries, t_derivs, adj_matrix, num_workers=5)
 
     if args.target_dim is None or args.target_dim == 1:
-        dimy_fex = fex.SingleFEX('depth_2_tree_config', 1, num_finetune_epochs=4000, controller_epochs=200, num_fex_epochs=60, device=device, expression_threshold=0.001)
+        dimy_fex = fex.SingleFEX('depth_2_tree_config', 1, num_finetune_epochs=5000, controller_epochs=200, num_fex_epochs=60, device=device, expression_threshold=0.001)
         dimy_fex.fit(timeseries, t_derivs, num_workers=5)
 
     if args.target_dim is None or args.target_dim == 2:
-        dimz_fex = fex.SingleFEX('depth_2_tree_config', 2, controller_epochs=200, num_finetune_epochs=4000, num_fex_epochs=60, device=device, expression_threshold=0.001)
+        dimz_fex = fex.SingleFEX('depth_2_tree_config', 2, controller_epochs=200, num_finetune_epochs=10000, finetune_lr=0.002, num_fex_epochs=80, device=device, expression_threshold=0.001)
         dimz_fex.fit(timeseries, t_derivs, num_workers=5)
 
     if args.target_dim is None:

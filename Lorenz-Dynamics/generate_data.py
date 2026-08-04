@@ -1,3 +1,4 @@
+from FEX.utils import numerical_deriv
 import torch
 
 def make_adjacency(num_nodes: int, probability: float, device) -> torch.Tensor:
@@ -21,6 +22,34 @@ def add_gaussian_noise_db(data: torch.Tensor, snr_db: float):
     return data + noise
 
 
+def lorenz_rhs(state: torch.Tensor, adjacency: torch.Tensor, coupling_strength: float):
+    x_i = state[:, 0]
+    y_i = state[:, 1]
+    z_i = state[:, 2]
+
+    self_dynamics = 10.0 * (y_i - x_i)
+
+    # pairwise[i, j] = x_j - x_i
+    pairwise = x_i.unsqueeze(0) - x_i.unsqueeze(1)
+
+    # sum_j A_ij * (x_j - x_i)
+    coupling = coupling_strength * (pairwise * adjacency).sum(dim=1)
+
+    dx = self_dynamics + coupling
+    dy = x_i * (28.0 - z_i) - y_i
+    dz = x_i * y_i - (8.0 / 3.0) * z_i
+
+    return torch.stack((dx, dy, dz), dim=-1)
+
+
+def rk4_step(state: torch.Tensor, adjacency: torch.Tensor, dt: float, coupling_strength: float):
+    k1 = lorenz_rhs(state, adjacency, coupling_strength)
+    k2 = lorenz_rhs(state + 0.5 * dt * k1, adjacency, coupling_strength)
+    k3 = lorenz_rhs(state + 0.5 * dt * k2, adjacency, coupling_strength)
+    k4 = lorenz_rhs(state + dt * k3, adjacency, coupling_strength)
+    return state + dt * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
+
+
 def make_data(
     num_samples: int,
     adjacency: torch.Tensor,
@@ -28,48 +57,26 @@ def make_data(
     coupling=0.15
 ):
     num_nodes = adjacency.size(0)
-    device = adjacency.device
 
-    states = torch.empty(num_samples, num_nodes, 3, device=device)
-    derivatives = torch.empty_like(states)
+    states = torch.empty(num_samples, num_nodes, 3, device=adjacency.device, dtype=adjacency.dtype)
 
     states[0, :, 0].uniform_(-15.0, 15.0)
     states[0, :, 1].uniform_(-15.0, 15.0)
     states[0, :, 2].uniform_(5.0, 35.0)
 
     dt = 0.01
-    sigma = 10.0
-    rho = 28.0
-    b = 8.0 / 3.0
-    coupling_strength = coupling
 
-    for t in range(num_samples):
-        x_i = states[t, :, 0]
-        y_i = states[t, :, 1]
-        z_i = states[t, :, 2]
+    with torch.no_grad():
+        for t in range(1, num_samples):
+            states[t] = rk4_step(states[t - 1], adjacency, dt, coupling)
 
-        self_dynamics = sigma * (y_i - x_i)
-
-        # pairwise[i, j] = x_j - x_i
-        pairwise = x_i.unsqueeze(0) - x_i.unsqueeze(1)
-
-        # sum_j A_ij * (x_j - x_i)
-        coupling = coupling_strength * (pairwise * adjacency).sum(dim=1)
-
-        dx = self_dynamics + coupling
-        dy = x_i * (rho - z_i) - y_i
-        dz = x_i * y_i - b * z_i
-
-        derivatives[t, :, 0] = dx
-        derivatives[t, :, 1] = dy
-        derivatives[t, :, 2] = dz
-
-        if t < num_samples - 1:
-            states[t + 1, :, 0] = states[t, :, 0] + dt * dx
-            states[t + 1, :, 1] = states[t, :, 1] + dt * dy
-            states[t + 1, :, 2] = states[t, :, 2] + dt * dz
+    observed_states = states.clone()
 
     if snr is not None:
-        derivatives = add_gaussian_noise_db(derivatives, snr)
+        observed_states = add_gaussian_noise_db(observed_states, snr)
+    observed_derivatives = numerical_deriv.five_point(observed_states, dt=dt)
 
-    return states.cpu(), derivatives.cpu()
+    # Five-point differentiation estimates derivatives at indices 2:-2.
+    observed_states = observed_states[2:-2]
+
+    return observed_states.cpu(), observed_derivatives.cpu()
