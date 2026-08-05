@@ -91,7 +91,7 @@ def rk4_step(state: torch.Tensor, adjacency: torch.Tensor, dt: float):
     return state + dt * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
 
 
-def make_timeseries(num_samples: int, adjacency: torch.Tensor, snr: float | None = None, dt: float = 0.01) -> tuple[torch.Tensor, torch.Tensor]:
+def make_timeseries(num_samples: int, adjacency: torch.Tensor, snr: int | None = None, dt: float = 0.01) -> tuple[torch.Tensor, torch.Tensor]:
     num_nodes = adjacency.size(0)
     states = torch.empty(num_samples, num_nodes, 3, device=adjacency.device, dtype=adjacency.dtype)
     states[0, :, 0].uniform_(-2.0, 2.0)
@@ -105,9 +105,11 @@ def make_timeseries(num_samples: int, adjacency: torch.Tensor, snr: float | None
     observed_states = states.clone()
     if snr is not None:
         observed_states = add_gaussian_noise_db(observed_states, snr)
-    observed_derivatives = numerical_deriv.five_point(observed_states, dt=dt)
+    if snr == 30:
+        observed_states, observed_derivatives = numerical_deriv.smoothed_five_point(observed_states, dt=dt)
+    else:
+        observed_derivatives = numerical_deriv.five_point(observed_states, dt=dt)
+        observed_states = observed_states[2:-2]
 
-    # Five-point differentiation estimates derivatives at indices 2:-2.
-    observed_states = observed_states[2:-2]
 
     return observed_states.cpu(), observed_derivatives.cpu()

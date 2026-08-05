@@ -36,7 +36,7 @@ def train_network_fex(
     inter_tree_params = list(inter_dynam_tree.all_parameters())
 
 
-    adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr, betas=(0.95, 0.999))
+    adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr)
     adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr)
 
 

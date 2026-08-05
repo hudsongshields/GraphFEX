@@ -51,14 +51,14 @@ class CoupledFEX():
 
 
 
-    def fit(self, data, target, adjacency, batch_size=64, num_workers=2, finetune_bs=128):
+    def fit(self, data, target, adjacency, batch_size=64, num_workers=2, finetune_bs=128, num_groups=1):
         dataloader = DataLoader(
             TensorDataset(data, target),
             batch_size=batch_size,
             shuffle=True,
             pin_memory=self.device == "cuda",
         )
-        best_candidates = train_network_controller(self.self_fex_struct, self.inter_fex_struct, dataloader, adjacency, self.controller_config, self.fex_config, num_workers=num_workers)
+        best_candidates = train_network_controller(self.self_fex_struct, self.inter_fex_struct, dataloader, adjacency, self.controller_config, self.fex_config, num_workers=num_workers, num_groups=num_groups)
         self.fex_config.num_epochs = self.finetune_epochs
         self.fex_config.lr = self.finetune_lr
         self.fex_config.inter_lr = self.finetune_lr
