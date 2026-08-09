@@ -27,7 +27,7 @@ def main():
 
     timesteps=5000
     adj_matrix = make_static_sf_adjacency(100, 500, gamma_in=3.5, gamma_out=3.5)
-    timeseries, t_derivs = make_timeseries(num_samples=timesteps, adjacency=adj_matrix, snr=args.snr)
+    timeseries, t_derivs = make_timeseries(num_samples=timesteps, adjacency=adj_matrix, snr=args.snr, smoothing=True)
 
     if args.target_dim is None or args.target_dim == 0:
         dimx_fex = fex.CoupledFEX('depth_3_leaves_4_config', 'depth_2_tree_config', 0, controller_epochs=300, controller_lr=0.005, finetune_epochs=20000, finetune_lr=0.0008, num_fex_epochs=120, self_lr=0.02, inter_lr=0.02, bfgs_epochs=30, bfgs_lr=0.6, poolsize=8, device=device, expression_threshold=0.001)

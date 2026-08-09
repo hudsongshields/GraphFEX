@@ -1,13 +1,27 @@
 from FEX.utils import numerical_deriv
 import torch
 
-def make_adjacency(num_nodes: int, probability: float, device) -> torch.Tensor:
-    adjacency = (torch.rand(num_nodes, num_nodes) < probability).float()
-    adjacency.fill_diagonal_(0.0)
+def make_adjacency(num_nodes: int, target_degree: float):
+    probability = target_degree / (num_nodes - 1)
+
+    # Generate only upper-triangular edges
+    rand_mat = torch.rand(num_nodes, num_nodes)
+    upper = torch.triu(
+        (rand_mat < probability).float(),
+        diagonal=1
+    )
+
+    # Mirror to make network undirected
+    adjacency = upper + upper.T
+
+    # Ensure no isolated nodes
     for node in range(num_nodes):
         if adjacency[node].sum() == 0:
-            adjacency[node, (node + 1) % num_nodes] = 1.0
-    return adjacency.cpu()
+            neighbor = (node + 1) % num_nodes
+            adjacency[node, neighbor] = 1.0
+            adjacency[neighbor, node] = 1.0
+
+    return adjacency
 
 
 def add_gaussian_noise_db(data: torch.Tensor, snr_db: float):
@@ -54,7 +68,7 @@ def make_data(
     num_samples: int,
     adjacency: torch.Tensor,
     snr: int = None,
-    coupling=0.15
+    coupling=3.6
 ):
     num_nodes = adjacency.size(0)
 

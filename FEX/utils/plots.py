@@ -39,31 +39,32 @@ def plot_dynamics(true_x, true_y, true_z, predicted_states, *, elev=30, azim=45)
 
 
 plt.rcParams.update({
-    "text.usetex": True,                     # Turn on LaTeX rendering
-    "font.family": "serif",                  # Use standard serif
-    "font.serif": ["Computer Modern Roman"], # Match Overleaf default font
+    "text.usetex": True,
+    "font.family": "serif",
 
-    "font.size": 14,                         # Set font size
-    "axes.labelsize": 14,                    # Set axes label size
-    "axes.titlesize": 14,                    # Set axes title size
-    "legend.fontsize": 14,                   # Set legend font size
-    "xtick.labelsize": 14,                   # Set x-tick label size
-    "ytick.labelsize": 14,                   # Set y-tick label size
+    "font.size": 20,
+    "axes.labelsize": 20,
+    "axes.titlesize": 20,
+    "legend.fontsize": 18,
+    "xtick.labelsize": 18,
+    "ytick.labelsize": 18,
 })
 
-# i need a grid of 4 squares (2x2)
-# in each square, I want the 2d (time by single dim) dynamics for both true and predicted states overlapping, and then the usual 3d visualization within the same square (so 2 plots per square)
-# each square distinguishes by SNR ratio, but they should be only distinguished visually by a), b), c), d) in the top left corner of each square
-# each square should only have one legend in the top right (so the legend is on the 3d visualization plot), so both graphs must follow the same coloring pattern for true/predicted states
+
 def plot_panel(nonePred, noneTrue, snr60Pred, snr60True, snr45Pred, snr45True, snr30Pred, snr30True, *, elev=30, azim=45):
-    fig = plt.figure(figsize=(18, 6))
-    gs_outline = fig.add_gridspec(2, 2, wspace=0.18, hspace=0.24)
+    fig = plt.figure(figsize=(12, 7.0))
+    gs_outline = fig.add_gridspec(2, 2, wspace=0.18, hspace=0.1)
     snr_labels = [r'(a)', r'(b)', r'(c)', r'(d)']
     data_pairs = [(nonePred, noneTrue), (snr60Pred, snr60True), (snr45Pred, snr45True), (snr30Pred, snr30True)]
 
     for i, (predicted_states, true_states) in enumerate(data_pairs):
 
-        inner_sq = gs_outline[i // 2, i % 2].subgridspec(3, 2, width_ratios=[1.0, 0.70], wspace=0.02, hspace=0.08)
+        inner_sq = gs_outline[i // 2, i % 2].subgridspec(
+            3, 2,
+            width_ratios=[1.0, 0.7],
+            wspace=0.05,
+            hspace=0.08
+        )
         ax1 = [fig.add_subplot(inner_sq[i, 0]) for i in range(3)]
         ax2 = fig.add_subplot(inner_sq[:, 1], projection='3d')
         ax1[0].plot(true_states[:, 0], color='blue')
@@ -74,9 +75,12 @@ def plot_panel(nonePred, noneTrue, snr60Pred, snr60True, snr45Pred, snr45True, s
         ax1[1].set_ylabel(r'$x_{i,2}$') 
         ax1[2].plot(true_states[:, 2], color='blue')
         ax1[2].set_ylabel(r'$x_{i,3}$') 
-        ax1[2].set_xlabel(r'Time')
+        if i < 2:
+            ax1[2].tick_params(axis='x', which='both', bottom=False, labelbottom=False)
+        else:
+            ax1[2].set_xlabel(r'Time')
 
-        ax1[0].set_title(snr_labels[i], loc='left', y=0.71, x=-0.21, fontsize=12, fontweight='bold') # top left corner
+        ax1[0].set_title(snr_labels[i], loc='left', y=0.71, x=-0.29, fontweight='bold') # top left corner
         # align x-dim labels (ylabels for the 3 plots)
         for ax in ax1: 
             ax.label_outer()
@@ -98,10 +102,17 @@ def plot_panel(nonePred, noneTrue, snr60Pred, snr60True, snr45Pred, snr45True, s
 
         # remove tick labels and lines
         ax2.set_axis_off()
-        ax2.set_box_aspect(None, zoom=1.1)
+        ax2.set_box_aspect(None, zoom=1.15)
 
-        if i == 1:
-            ax2.legend(loc='upper right')
+        
 
-    fig.subplots_adjust(left=0.06, right=0.98, top=0.98, bottom=0.1)
+    fig.legend(
+        labels=[r'True Dynamics', r'FEX'], 
+        loc='center', 
+        bbox_to_anchor=(0.5, 0.05),
+        ncol=1
+    )
+
+    fig.subplots_adjust(left=0.06, right=0.98, top=0.95, bottom=0.16)
+    fig.savefig("HR/test_panel_dynamics.png", bbox_inches="tight")
     return fig

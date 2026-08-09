@@ -57,7 +57,7 @@ def dimy_fex_predict(state, snr=None):
     elif snr == 45:
         dy_dt = 1.0052 - 4.9923*x**2 - 0.999*y
     elif snr == 30:
-        dy_dt = 1.0634 - 4.9185*x**2 - 0.986*y
+        dy_dt = -4.9845*x**2  - 0.9951*y + 0.9934
     return dy_dt.unsqueeze(-1)
 def dimz_fex_predict(state, snr=None):
     x = state[:, 0]
@@ -119,7 +119,7 @@ with torch.no_grad():
 from FEX.utils.plots import plot_panel
 
 node = 80
-fig = plot_panel(
+_ = plot_panel(
     nonePred=predicted_states[:, node, :].cpu(),
     noneTrue=timeseries[:, node, :].cpu(),
     snr60Pred=snr_60_pred[:, node, :].cpu(),
@@ -131,4 +131,3 @@ fig = plot_panel(
     elev=30,
     azim=45
 )
-plt.show()
