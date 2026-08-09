@@ -11,9 +11,8 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from FEX.training.train_configs import FEXConfig, runtimeconfig
 from FEX.training.train_controller import ControllerConfig, train_network_controller
-from FEX.utils.numerical_deriv import NumericalDeriv
 from FEX.utils.tree_configs import get_tree_config
-from HR.data.generate_data import make_adjacency, make_data
+from HR.data.generate_data import make_adjacency, make_timeseries
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -39,13 +38,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--nodes", type=int, default=100)
-    parser.add_argument("--samples", type=int, default=4096)
+    parser.add_argument("--samples", type=int, default=1024)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--snr", type=int, default=None)
     parser.add_argument("--num_epochs", type=int, default=80)
     parser.add_argument("--controller_epochs", type=int, default=400)
     parser.add_argument("--num_stoch_batches", type=int, default=1)
+
+    parser.add_argument("--pct_edges", type=float, default=0.1)
 
     parser.add_argument("--num_cands_per_epoch", type=int, default=10)
     args = parser.parse_args()
@@ -62,8 +63,8 @@ def main():
     forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
     inter_tree_config = get_tree_config("depth_2_tree_config")
 
-    adjacency = make_adjacency(args.nodes, probability=0.1, device=runtimeconfig.device)
-    states, derivatives = make_data(args.samples, adjacency, snr=args.snr)
+    adjacency = make_adjacency(args.nodes, probability=args.pct_edges, device=runtimeconfig.device)
+    states, derivatives = make_timeseries(args.samples, adjacency, snr=args.snr)
     dataloader = DataLoader(
         TensorDataset(states, derivatives),
         batch_size=args.batch_size,
@@ -83,7 +84,7 @@ def main():
 
     fex_config = FEXConfig(
         num_epochs=args.num_epochs,
-        bfgs_epochs=20,
+        bfgs_epochs=0,
         lr=0.2,
         inter_lr=0.2,
         bfgs_lr=0.1,
