@@ -7,7 +7,7 @@ import random
 
 
 from FEX.models import fex
-from HR.data.generate_data import make_static_sf_adjacency, make_timeseries
+from experiments.HR.data.generate_data import make_static_sf_adjacency, make_timeseries
 from FEX.utils.plots import plot_dynamics
 from FEX.utils.metrics import sMAPE
 

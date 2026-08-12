@@ -16,11 +16,11 @@ def reseed(seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-from data.generate_data import make_static_sf_adjacency
+from NumericalExperiments.HR.data.generate_data import make_static_sf_adjacency
 timesteps=5000
 adj_matrix = make_static_sf_adjacency(100, 500, gamma_in=3.5, gamma_out=3.5)
 print(torch.mean(adj_matrix.sum(dim=1))) # number of incoming edges (degree)
-from data.generate_data import make_timeseries
+from NumericalExperiments.HR.data.generate_data import make_timeseries
 snr_30_t, _ = make_timeseries(num_samples=5000, adjacency=adj_matrix, snr=30)
 reseed(seed)
 snr_45_t, _ = make_timeseries(num_samples=5000, adjacency=adj_matrix, snr=45)

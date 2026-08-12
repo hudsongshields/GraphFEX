@@ -1,21 +1,10 @@
-import argparse
-
-import torch 
-import torch 
-import numpy as np 
-import pandas as pd 
-import random 
-seed = 42 
-random.seed(seed) 
-np.random.seed(seed) 
-torch.manual_seed(seed) 
-if torch.cuda.is_available(): 
-    torch.cuda.manual_seed_all(seed) 
-from FEX.models import fex 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-from data.generate_data import make_static_sf_adjacency
-import matplotlib.pyplot as plt
-from data.generate_data import make_timeseries
+import numpy as np
+import torch
+from sklearn.base import clone
+from sklearn.utils.validation import check_is_fitted
+from pysindy.feature_library.base import BaseFeatureLibrary, x_sequence_or_item
+from pysindy.utils import AxesArray
+import pysindy as ps
 
 
 def to_numpy(x):
@@ -24,10 +13,6 @@ def to_numpy(x):
 
     return np.asarray(x)
 
-from sklearn.base import clone
-from sklearn.utils.validation import check_is_fitted
-from pysindy.feature_library.base import BaseFeatureLibrary, x_sequence_or_item
-from pysindy.utils import AxesArray
 class GraphLibrary(BaseFeatureLibrary):
     def __init__(self, adjacency, self_library, neighbor_library):
         self.adjacency = adjacency
@@ -88,8 +73,6 @@ class GraphLibrary(BaseFeatureLibrary):
         interaction_names = [f"({self_name})({graph_name})" for self_name in self_names for graph_name in graph_names]
         return self_names + interaction_names
 
-import pysindy as ps
-
 
 class CloneableCustomLibrary(ps.CustomLibrary):
     def __init__(self, library_functions, function_names=None, interaction_only=True, include_bias=False):
@@ -100,38 +83,3 @@ class CloneableCustomLibrary(ps.CustomLibrary):
             interaction_only=interaction_only,
             include_bias=include_bias,
         )
-
-from sklearn.linear_model import Lasso
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--snr', type=int, default=60)
-    parser.add_argument('--output', type=str, default="recovered_scindy")
-    args = parser.parse_args()
-
-    timesteps=5000
-    dt = 0.01
-    adj_matrix = make_static_sf_adjacency(100, 500, gamma_in=3.5, gamma_out=3.5)
-    timeseries, t_derivs = make_timeseries(num_samples=timesteps, adjacency=adj_matrix, snr=args.snr)
-
-    sigmoid_functions = [lambda x: 1 / (1 + np.exp(-x))]
-    sigmoid_names = [lambda x: f"sigmoid({x})"]
-    sigmoid_library = CloneableCustomLibrary(library_functions=sigmoid_functions, function_names=sigmoid_names)
-
-    self_library = (ps.PolynomialLibrary(degree=3, include_bias=True) + ps.FourierLibrary(n_frequencies=1) + sigmoid_library)
-    neighbor_library = (ps.PolynomialLibrary(degree=3, include_bias=False) + ps.FourierLibrary(n_frequencies=1) + sigmoid_library)
-    graph_library = GraphLibrary(adjacency=to_numpy(adj_matrix), self_library=self_library, neighbor_library=neighbor_library)
-
-    n_iter = 20000
-    optimizer = ps.STLSQ(threshold=0.1, alpha=0.55, max_iter=n_iter)
-
-    model = ps.SINDy(feature_library=graph_library, optimizer=optimizer)
-    model.fit(to_numpy(timeseries), t=dt, x_dot=to_numpy(t_derivs), feature_names=["x", "y", "z"])
-    model.print()
-    if args.output is not None:
-        log_path = f"{args.output}_snr{args.snr}.txt"
-        with open(log_path, "w") as f:
-            model.print(file=f)
-            f.write(f"SR3 iterations: {n_iter}/{model.optimizer.max_iter}\n")
-
-if __name__ == "__main__":
-    main()

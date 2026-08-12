@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from FEX.training.train_configs import FEXConfig, runtimeconfig
 from FEX.training.train_controller import ControllerConfig, train_network_controller
 from FEX.utils.tree_configs import get_tree_config
-from HR.data.generate_data import make_adjacency, make_timeseries
+from experiments.HR.data.generate_data import make_adjacency, make_timeseries
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
