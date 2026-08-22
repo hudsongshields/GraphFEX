@@ -38,20 +38,19 @@ def plot_dynamics(true_x, true_y, true_z, predicted_states, *, elev=30, azim=45)
 
 
 
-plt.rcParams.update({
-    "text.usetex": True,
-    "font.family": "serif",
+def plot_panel(nonePred, noneTrue, snr60Pred, snr60True, snr45Pred, snr45True, snr30Pred, snr30True, *, elev=30, azim=45, save_path=None):
+    
+    plt.rcParams.update({
+        "text.usetex": True,
+        "font.family": "serif",
 
-    "font.size": 20,
-    "axes.labelsize": 20,
-    "axes.titlesize": 20,
-    "legend.fontsize": 18,
-    "xtick.labelsize": 18,
-    "ytick.labelsize": 18,
-})
-
-
-def plot_panel(nonePred, noneTrue, snr60Pred, snr60True, snr45Pred, snr45True, snr30Pred, snr30True, *, elev=30, azim=45):
+        "font.size": 20,
+        "axes.labelsize": 20,
+        "axes.titlesize": 20,
+        "legend.fontsize": 18,
+        "xtick.labelsize": 18,
+        "ytick.labelsize": 18,
+    })
     fig = plt.figure(figsize=(12, 7.0))
     gs_outline = fig.add_gridspec(2, 2, wspace=0.18, hspace=0.1)
     snr_labels = [r'(a)', r'(b)', r'(c)', r'(d)']
@@ -113,6 +112,9 @@ def plot_panel(nonePred, noneTrue, snr60Pred, snr60True, snr45Pred, snr45True, s
         ncol=1
     )
 
+
     fig.subplots_adjust(left=0.06, right=0.98, top=0.95, bottom=0.16)
-    fig.savefig("HR/test_panel_dynamics.png", bbox_inches="tight")
+    if save_path is None:
+        save_path = "HR/test_panel_dynamics.png"
+    fig.savefig(f"{save_path}.png", bbox_inches="tight")
     return fig

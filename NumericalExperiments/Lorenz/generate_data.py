@@ -68,6 +68,7 @@ def make_data(
     num_samples: int,
     adjacency: torch.Tensor,
     snr: int = None,
+    smoothing: bool = False,
     coupling=3.6
 ):
     num_nodes = adjacency.size(0)
@@ -85,12 +86,12 @@ def make_data(
             states[t] = rk4_step(states[t - 1], adjacency, dt, coupling)
 
     observed_states = states.clone()
-
     if snr is not None:
         observed_states = add_gaussian_noise_db(observed_states, snr)
-    observed_derivatives = numerical_deriv.five_point(observed_states, dt=dt)
-
-    # Five-point differentiation estimates derivatives at indices 2:-2.
-    observed_states = observed_states[2:-2]
+    if smoothing:
+        observed_states, observed_derivatives = numerical_deriv.smoothed_five_point(observed_states, dt=dt)
+    else:
+        observed_derivatives = numerical_deriv.five_point(observed_states, dt=dt)
+        observed_states = observed_states[2:-2]
 
     return observed_states.cpu(), observed_derivatives.cpu()
