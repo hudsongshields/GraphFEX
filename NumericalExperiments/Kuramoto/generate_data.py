@@ -77,10 +77,10 @@ def make_data(
         # phase_difference[i,j] = theta_j - theta_i
         phase_difference = theta[None, :] - theta[:, None]
 
-        mode1 = torch.sin(phase_difference - 1.05)
-        mode2 = 0.33 * torch.sin(2.0 * phase_difference)
+        mode1 = torch.sin(phase_difference) #- 1.05)
+        # mode2 = 0.33 * torch.sin(2.0 * phase_difference)
 
-        interaction = adjacency * (mode1 + mode2)
+        interaction = adjacency * (mode1) #+ mode2)
         coupling_term = interaction.sum(dim=1)
 
         dtheta = omega + coupling * coupling_term
