@@ -7,7 +7,7 @@ from ..models.learnable_tree import FEX
 from ..models.nodes import Node
 from ..helpers.sampler import epsilon_greedy_sample
 from .train_fex import train_network_fex, train_fex
-from .train_configs import ControllerConfig, FEXConfig, runtimeconfig
+from .train_configs import ControllerConfig, FEXConfig
 from ..helpers.pools import GraphPoolCandidate, GraphPool, Pool, PoolCandidate
 
 from typing import Callable
@@ -18,6 +18,7 @@ import os
 import math
 import time
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 self_ops_per_node = None
 inter_ops_per_node = None
@@ -116,9 +117,9 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
         ops_per_node=self_ops_per_node + inter_ops_per_node,
         input_size=config.input_dim,
         hidden_size=config.hidden_dim,
-    ).to(runtimeconfig.device)
+    ).to(device)
     optimizer = torch.optim.Adam(controller.parameters(), lr=config.lr)
-    controller_input = torch.zeros(config.input_dim).to(runtimeconfig.device)
+    controller_input = torch.zeros(config.input_dim).to(device)
 
     fex_kwargs = {
         "leaf_dim": next(iter(dataloader))[0].shape[2],
@@ -145,7 +146,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
 
     context = mp.get_context("spawn")
     gpu_ids = list(range(num_gpus)) if num_gpus > 0 else [None]
-    with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, runtimeconfig.train_log_path, num_groups_global)) as contextpool:
+    with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, None, num_groups_global)) as contextpool:
         for epoch in range(config.num_epochs):
             optimizer.zero_grad()
             num_cands = config.num_cands_per_epoch
@@ -173,10 +174,10 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
 
             print(f"Epoch {epoch} pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
 
-            rewards = torch.tensor([cand.reward for cand in top_epoch_cands]).to(runtimeconfig.device)
+            rewards = torch.tensor([cand.reward for cand in top_epoch_cands]).to(device)
             log_probs_sorted = [log_probs[cand.id - epoch * config.num_cands_per_epoch] for cand in top_epoch_cands]
 
-            thresh_reward = torch.tensor(top_epoch_cands.threshold).to(runtimeconfig.device)
+            thresh_reward = torch.tensor(top_epoch_cands.threshold).to(device)
             advantage = rewards - thresh_reward
             loss = -(advantage * torch.stack(log_probs_sorted)).mean()
 
@@ -205,9 +206,9 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
         ops_per_node=self_ops_per_node,
         input_size=controller_config.input_dim,
         hidden_size=controller_config.hidden_dim,
-    ).to(runtimeconfig.device)
+    ).to(device)
     optimizer = torch.optim.Adam(controller.parameters(), lr=controller_config.lr)
-    controller_input = torch.zeros(controller_config.input_dim).to(runtimeconfig.device)
+    controller_input = torch.zeros(controller_config.input_dim).to(device)
 
     fex_kwargs = {
         "leaf_dim": next(iter(dataloader))[0].shape[-1],
@@ -229,7 +230,7 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
 
     context = mp.get_context("spawn")
     gpu_ids = list(range(num_gpus)) if num_gpus > 0 else [None]
-    with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, None, fex_kwargs, None, dataloader_global, None, fex_config_global, runtimeconfig.train_log_path)) as contextpool:
+    with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, None, fex_kwargs, None, dataloader_global, None, fex_config_global, None)) as contextpool:
         for epoch in range(controller_config.num_epochs):
             optimizer.zero_grad()
             num_cands = controller_config.num_cands_per_epoch
@@ -256,10 +257,10 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
 
             print(f"Epoch {epoch}, pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
 
-            rewards = torch.tensor([cand.reward for cand in top_epoch_cands]).to(runtimeconfig.device)
+            rewards = torch.tensor([cand.reward for cand in top_epoch_cands]).to(device)
             log_probs_sorted = [log_probs[cand.id - epoch * controller_config.num_cands_per_epoch] for cand in top_epoch_cands]
 
-            thresh_reward = torch.tensor(top_epoch_cands.threshold).to(runtimeconfig.device)
+            thresh_reward = torch.tensor(top_epoch_cands.threshold).to(device)
             advantage = rewards - thresh_reward
             loss = -(advantage * torch.stack(log_probs_sorted)).mean()
 

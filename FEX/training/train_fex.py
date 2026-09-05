@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..models.learnable_tree import FEX
-from .train_configs import FEXConfig, runtimeconfig
+from .train_configs import FEXConfig
 import torch
 import torch.nn.functional as F
 import math
@@ -24,7 +24,7 @@ def train_network_fex(
     config: FEXConfig,
     *,
     num_groups=1,
-    device=runtimeconfig.device,
+    device="cuda" if torch.cuda.is_available() else "cpu",
     verbose: bool = False,
     log_every: int = 0,
 ):
@@ -169,7 +169,7 @@ def train_network_fex(
 
     return float(best_epoch_loss)
 
-def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.device, verbose=False, every_n_epochs=0):
+def train_fex(forcing_tree, dataloader, config: FEXConfig, device="cuda" if torch.cuda.is_available() else "cpu", verbose=False, every_n_epochs=0):
     forcing_tree.train()
     forcing_tree = forcing_tree.to(device)
     forcing_tree_params = forcing_tree.all_parameters()

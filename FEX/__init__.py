@@ -5,7 +5,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 from .models.controllers import Controller
 from .models.learnable_tree import FEX
-from .training.train_configs import ControllerConfig, FEXConfig, RunTimeConfig, runtimeconfig
+from .training.train_configs import ControllerConfig, FEXConfig
 from . import helpers
 from .helpers.tree_configs import get_tree_config
 
@@ -24,8 +24,6 @@ __all__ = [
 	"ControllerConfig",
 	"FEX",
 	"FEXConfig",
-	"RunTimeConfig",
-	"runtimeconfig",
 	"train_network_controller",
 	"train_network_fex",
     "get_tree_config",

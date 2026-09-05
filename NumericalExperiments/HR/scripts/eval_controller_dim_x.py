@@ -9,7 +9,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-from FEX.training.train_configs import FEXConfig, runtimeconfig
+from FEX.training.train_configs import FEXConfig
 from FEX.training.train_controller import ControllerConfig, train_network_controller
 from FEX.helpers.tree_configs import get_tree_config
 from NumericalExperiments.HR.generate_data import make_adjacency, make_timeseries
@@ -19,6 +19,7 @@ from NumericalExperiments.HR.generate_data import make_adjacency, make_timeserie
 SCRIPT_DIR = Path(__file__).resolve().parent
 HR_DIR = SCRIPT_DIR.parent
 DATA_DIR = HR_DIR / "data"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def setup_run_dir() -> Path:
     job_id = os.environ.get("SLURM_JOB_ID", "local")
@@ -59,18 +60,17 @@ def main():
     save_dir.mkdir(parents=True, exist_ok=True)
 
     log_path = save_dir / "controller_eval.log"
-    runtimeconfig.CreateLogger(str(log_path), name="train_logger")
 
     forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
     inter_tree_config = get_tree_config("depth_2_tree_config")
 
-    adjacency = make_adjacency(args.nodes, probability=args.pct_edges, device=runtimeconfig.device)
+    adjacency = make_adjacency(args.nodes, probability=args.pct_edges, device=device)
     states, derivatives = make_timeseries(args.samples, adjacency, snr=args.snr)
     dataloader = DataLoader(
         TensorDataset(states, derivatives),
         batch_size=args.batch_size,
         shuffle=True,
-        pin_memory=runtimeconfig.device == "cuda",
+        pin_memory=device == "cuda",
     )
 
     controller_config = ControllerConfig(
