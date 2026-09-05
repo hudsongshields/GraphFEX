@@ -1,14 +1,14 @@
 from pathlib import Path
 
-from ..utils.tree_configs import TreeConfig
+from ..helpers.tree_configs import TreeConfig
 
 from ..models.controllers import Controller
 from ..models.learnable_tree import FEX
 from ..models.nodes import Node
-from ..utils.sampler import epsilon_greedy_sample
+from ..helpers.sampler import epsilon_greedy_sample
 from .train_fex import train_network_fex, train_fex
 from .train_configs import ControllerConfig, FEXConfig, runtimeconfig
-from ..utils.pools import GraphPoolCandidate, GraphPool, Pool, PoolCandidate
+from ..helpers.pools import GraphPoolCandidate, GraphPool, Pool, PoolCandidate
 
 from typing import Callable
 import torch

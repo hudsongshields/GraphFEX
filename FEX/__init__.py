@@ -6,8 +6,8 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 from .models.controllers import Controller
 from .models.learnable_tree import FEX
 from .training.train_configs import ControllerConfig, FEXConfig, RunTimeConfig, runtimeconfig
-from . import utils
-from .utils.tree_configs import get_tree_config
+from . import helpers
+from .helpers.tree_configs import get_tree_config
 
 
 def train_network_controller(*args, **kwargs):

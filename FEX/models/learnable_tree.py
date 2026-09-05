@@ -6,7 +6,7 @@ import math
 import torch
 import torch.nn as nn
 from .nodes import Node
-from ..utils.tree_configs import TREE_CONFIGS
+from ..helpers.tree_configs import TREE_CONFIGS
 
 import logging
 tree_logger = logging.getLogger("debug_tree")
@@ -20,9 +20,8 @@ class LeafMLP(nn.Module):
         self.logits = nn.Parameter(torch.randn(input_dim) * 0.1)
         self.bias = nn.Parameter(torch.zeros(1))
         
-    def forward(self, leaf_input: torch.Tensor, unary_op=None):
-        transformed = unary_op(leaf_input) if unary_op is not None else leaf_input
-        return torch.sum(transformed * self.logits, dim=-1, keepdim=True) + self.bias
+    def forward(self, leaf_input: torch.Tensor):
+        return torch.sum(leaf_input * self.logits, dim=-1, keepdim=True) + self.bias
 
     def reset_parameters(self):
         with torch.no_grad():
@@ -66,7 +65,7 @@ class FEX(nn.Module):
         for idx, leaf in enumerate(leaf_mlps):
             leaf._debug_leaf_idx = idx
         self.leaf_mlps = nn.ModuleList(leaf_mlps)
-        self._normalize_leaf_unary_operations()
+        self._init_leaf_unary_operations()
 
         self.expr_thresh = kwargs.get("expression_threshold", 0.001)
 
@@ -80,11 +79,8 @@ class FEX(nn.Module):
                 out = self.leaf_mlps[node.leaf_idx](x)
 
             elif node.operation_type == "unary":
-                if node.left.operation_type == "leaf":
-                    out = self.leaf_mlps[node.left.leaf_idx](x, unary_op=node.operation.op)
-                else:
-                    child = compute_node(node.left, depth + 1)
-                    out = node.operation(child)
+                child = compute_node(node.left, depth + 1)
+                out = node.operation(child)
 
             elif node.operation_type == "binary":
                 left_val = compute_node(node.left, depth + 1)
@@ -96,8 +92,12 @@ class FEX(nn.Module):
 
         return compute_node(self.parent_node)
 
-    def _normalize_leaf_unary_operations(self):
-        """Leaf-level affine coefficients live in LeafMLP, not UnaryOperation."""
+    def _init_leaf_unary_operations(self):
+        """Initialize a=1, b=0 on unary nodes with leaf children.
+
+        The coefficients stay trainable; the neutral init keeps candidate
+        structures comparable during controller search.
+        """
         def action(node: Node):
             if (
                 node.operation_type == "unary"
@@ -107,8 +107,6 @@ class FEX(nn.Module):
                 with torch.no_grad():
                     node.operation.a.fill_(1.0)
                     node.operation.b.zero_()
-                node.operation.a.requires_grad_(False)
-                node.operation.b.requires_grad_(False)
 
         traverse(self.parent_node, action)
     
@@ -129,7 +127,7 @@ class FEX(nn.Module):
         def action(node: Node):
             node.reset()
         traverse(self.parent_node, action)
-        self._normalize_leaf_unary_operations()
+        self._init_leaf_unary_operations()
 
     def leaf_params(self):
         """Parameters controlling leaf dimension selection (logits + sigma)."""
@@ -244,15 +242,20 @@ class FEX(nn.Module):
                 return 1 / (1 + sp.exp(-value))
             if op_name == "safe_reciprocal":
                 return 1 / value
+            if op_name == "sin":
+                return sp.sin(value)    
             raise ValueError(f"Unsupported unary operator: {op_name}")
 
-        def build_leaf(leaf_idx, op_name="identity"):
+        def build_leaf(leaf_idx):
             leaf = self.leaf_mlps[leaf_idx]
-            threshold = rounded_parameter(leaf.bias)
-            for coefficient, symbol in zip(leaf.logits, symbols):
-                threshold += rounded_parameter(coefficient) * apply_unary(op_name, symbol)
-            return threshold
 
+            expression = rounded_parameter(leaf.bias)
+
+            for coefficient, symbol in zip(leaf.logits, symbols):
+                expression += rounded_parameter(coefficient) * symbol
+
+            return expression
+        
         def build(node):
             if node.operation_type == "leaf":
                 return build_leaf(node.leaf_idx)
@@ -260,7 +263,9 @@ class FEX(nn.Module):
             if node.operation_type == "binary":
                 left = build(node.left)
                 right = build(node.right)
+
                 op_name = node.operation.op.__name__
+
                 if op_name == "add":
                     return left + right
                 if op_name == "sub":
@@ -269,15 +274,16 @@ class FEX(nn.Module):
                     return left * right
                 if op_name == "safe_div":
                     return left / right
+
                 raise ValueError(f"Unsupported binary operator: {op_name}")
 
-            op_name = node.operation.op.__name__
-            if node.left.operation_type == "leaf":
-                return build_leaf(node.left.leaf_idx, op_name)
+            if node.operation_type == "unary":
+                child = build(node.left)
+                op_name = node.operation.op.__name__
 
-            child = build(node.left)
-            transformed = apply_unary(op_name, child)
-            return rounded_parameter(node.operation.a) * transformed + rounded_parameter(node.operation.b)
+                transformed = apply_unary(op_name, child)
+
+                return (rounded_parameter(node.operation.a) * transformed + rounded_parameter(node.operation.b))
 
         expanded = sp.expand(build(self.parent_node))
         retained_terms = []
@@ -295,45 +301,3 @@ class FEX(nn.Module):
     def visualize_tree(self, directory: str = "fex_tree_viz", clear_directory: bool = True):
         from ..training.tree_helpers import visualize_tree as vis
         return vis(self, filename=directory)
-    
-
-
-
-
-
-
-
-
-
-"""  Debug FEX Tree  """
-if __name__ == "__main__":
-    from .controllers import Controller
-    from ..utils.sampler import epsilon_greedy_sample
-    from ..utils.operations import unary_operation, binary_operation, UNARY_OPS, BINARY_OPS
-
-    logging.basicConfig(level=logging.INFO)
-    logging.getLogger("debug_tree").setLevel(logging.DEBUG) 
-
-    NUM_NODES = 5
-    """
-    Example tree structure
-
-    Node 0: Binary (Node 1, Node 2)
-    Node 1: Unary (Node 3)
-    Node 2: Unary (Node 4)
-    Node 3: Leaf
-    Node 4: Leaf
-    """
-
-    ops_per_node = [BINARY_OPS, UNARY_OPS, UNARY_OPS]
-    sample_indices = [1, 2, 3]
-    leaf1 = Node(operation_type="leaf", leaf_idx=0, name="leaf1", operation=None)
-    leaf2 = Node(operation_type="leaf", leaf_idx=1, name="leaf2", operation=None)
-    branch1 = Node(operation_type="unary", operation=unary_operation(sample_indices[1]), left=leaf1, name="branch1")
-    branch2 = Node(operation_type="unary", operation=unary_operation(sample_indices[2]), left=leaf2, name="branch2")
-    parent_node = Node(operation_type="binary", operation=binary_operation(sample_indices[0]), left=branch1, right=branch2, name="parent_node")
-
-    learnable_tree = FEX(leaf_dim=10, num_leaves=2, parent_node=parent_node)
-    fake_x = torch.randn(5, 10)
-    output = learnable_tree(fake_x)
-    print(output)

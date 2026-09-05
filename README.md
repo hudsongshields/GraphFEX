@@ -1,3 +1,32 @@
+This repository provides two main ways to run and interact with the numerical experiments:
+
+1. Jupyter notebooks: Each experiment directory under NumericalExperiments/ contains a fex_recovery.ipynb notebook for interactively running and analyzing FEX recovery.
+2. Command-line interface: NumericalExperiments/scripts/fex_recovery.py provides a Python script for running experiments from the command line, with the desired experiment selected through command-line arguments.
+
+The relevant repository structure is shown below:
+
+```mermaid
+graph TD
+    root[GraphFEX/] --> src[FEX/]
+    src --> utils[utils/]
+    utils --> fex[fex.py]
+
+    root --> experiments[NumericalExperiments/]
+
+    experiments --> HR[HR/]
+    HR --> HRtest[fex_recovery.ipynb]
+
+    experiments --> Lorenz[Lorenz/]
+    Lorenz --> Lorenztest[fex_recovery.ipynb]
+
+    experiments --> Kuramoto[Kuramoto/]
+    Kuramoto --> Kuramototest[fex_recovery.ipynb]
+
+    experiments --> scripts[scripts/]
+    scripts --> script[fex_recovery.py]
+```
+
+
 ### Hyperparameters
 
 | Hyperparameter | Description |

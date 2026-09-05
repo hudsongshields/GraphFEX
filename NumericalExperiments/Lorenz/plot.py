@@ -4,10 +4,6 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import random
 
-# ============================================================
-# Reproducibility
-# ============================================================
-
 seed = 42
 
 def reseed(seed):
@@ -20,10 +16,6 @@ def reseed(seed):
 reseed(seed)
 
 
-# ============================================================
-# Generate Lorenz data
-# ============================================================
-
 from .generate_data import (make_adjacency, make_data)
 
 timesteps = 5000
@@ -35,7 +27,6 @@ print("Mean degree:", torch.mean(adj_matrix.sum(dim=1)))
 
 
 # Reseed before every trajectory so that the initial conditions
-# are consistent between noise levels.
 reseed(seed)
 snr_30_t, _ = make_data(
     num_samples=timesteps,
@@ -74,10 +65,7 @@ snr_60_t = snr_60_t.cpu()
 timeseries = timeseries.cpu()
 
 
-# ============================================================
 # Learned Lorenz equations
-# ============================================================
-
 def dimx_fex_predict(state, adj_matrix, snr=None):
     x = state[:, 0]
     y = state[:, 1]
@@ -228,10 +216,6 @@ def dimz_fex_predict(state, snr=None):
     return dz_dt.unsqueeze(-1)
 
 
-# ============================================================
-# RK4 integration
-# ============================================================
-
 def rk4_step(state, dt, adj_matrix, snr=None):
 
     k1 = torch.cat([
@@ -267,9 +251,6 @@ def rk4_step(state, dt, adj_matrix, snr=None):
     return state + dt * (k1 + 2*k2 + 2*k3 + k4) / 6.0
 
 
-# ============================================================
-# Allocate predicted trajectories
-# ============================================================
 def init_states(timesteps, timeseries):
     predicted_states = torch.zeros(
         timesteps + 1,
@@ -305,10 +286,7 @@ def init_states(timesteps, timeseries):
     return predicted_states, snr_30_pred, snr_45_pred, snr_60_pred
 
 
-# ============================================================
 # Integrate learned systems
-# ============================================================
-
 def integrate_trajectories(predicted_states, snr_30_pred, snr_45_pred, snr_60_pred, timesteps, dt, adj_matrix):
     with torch.no_grad():
         for t in range(timesteps):
@@ -341,7 +319,7 @@ def integrate_trajectories(predicted_states, snr_30_pred, snr_45_pred, snr_60_pr
                 snr=60,
             )
 
-from FEX.utils.plots import plot_panel
+from FEX.helpers.plots import plot_panel
 def main():
     predicted_states, snr_30_pred, snr_45_pred, snr_60_pred = init_states(timesteps, timeseries)
     integrate_trajectories(predicted_states, snr_30_pred, snr_45_pred, snr_60_pred, timesteps, dt, adj_matrix)

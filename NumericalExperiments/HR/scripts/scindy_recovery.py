@@ -10,11 +10,11 @@ np.random.seed(seed)
 torch.manual_seed(seed) 
 if torch.cuda.is_available(): 
     torch.cuda.manual_seed_all(seed) 
-from FEX.models import fex 
+from FEX.utils import fex 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-from NumericalExperiments.HR.data.generate_data import make_static_sf_adjacency
+from NumericalExperiments.HR.generate_data import make_static_sf_adjacency
 import matplotlib.pyplot as plt
-from NumericalExperiments.HR.data.generate_data import make_timeseries
+from NumericalExperiments.HR.generate_data import make_timeseries
 
 
 

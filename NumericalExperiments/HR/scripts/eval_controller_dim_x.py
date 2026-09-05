@@ -11,9 +11,10 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from FEX.training.train_configs import FEXConfig, runtimeconfig
 from FEX.training.train_controller import ControllerConfig, train_network_controller
-from FEX.utils.tree_configs import get_tree_config
-from NumericalExperiments.HR.data.generate_data import make_adjacency, make_timeseries
+from FEX.helpers.tree_configs import get_tree_config
+from NumericalExperiments.HR.generate_data import make_adjacency, make_timeseries
 
+"""This is a temporary script"""
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 HR_DIR = SCRIPT_DIR.parent

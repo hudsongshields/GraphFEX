@@ -28,7 +28,7 @@ def test_total_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_matrix):
     return loss
 
 
-def total_loss(batch_x, batch_dy_val, self_tree, inter_tree=None, adj_mat_nodes=None, adj_mat_edges=None, scatter_idx=None, norm_coeff=1.0):
+def total_loss(batch_x, batch_dy_val, self_tree, inter_tree=None, adj_mat_nodes=None, adj_mat_edges=None, edge_weights=None):
     B, G, D = batch_x.shape
     forcing_out = self_tree(batch_x.reshape(B * G, D)).reshape(B, G, 1)
     batch_dy = forcing_out
@@ -38,17 +38,17 @@ def total_loss(batch_x, batch_dy_val, self_tree, inter_tree=None, adj_mat_nodes=
         inter_sources = batch_x[:, adj_mat_nodes, :]
         inter_edges = batch_x[:, adj_mat_edges, :]
         edge_inputs = torch.cat([inter_sources, inter_edges], dim=-1)
-        inter_out = inter_tree(edge_inputs.reshape(B * num_edges, -1)).reshape(B, num_edges, 1)
+        inter_out = inter_tree(edge_inputs.reshape(B * num_edges, -1)).reshape(B, num_edges, 1) * edge_weights.view(1, num_edges, 1)
 
-        local_idx = scatter_idx.view(1, num_edges, 1).expand(B, num_edges, 1)
+        local_idx = adj_mat_nodes.view(1, num_edges, 1).expand(B, num_edges, 1)
         interaction_out = torch.zeros(B, G, 1, device=batch_x.device, dtype=forcing_out.dtype)
         interaction_out.scatter_add_(1, local_idx, inter_out)
-        batch_dy = forcing_out + interaction_out * norm_coeff
+        batch_dy = forcing_out + interaction_out
 
     return F.mse_loss(batch_dy, batch_dy_val)
 
 
-def group_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_mat_nodes, adj_mat_edges, scatter_idx, num_groups):
+def group_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_mat_nodes, adj_mat_edges, edge_weights, num_groups):
     device = batch_x.device
     num_nodes = batch_x.size(1)
 
@@ -59,7 +59,6 @@ def group_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_mat_nodes, adj_
 
     adj_mat_nodes = adj_mat_nodes.to(device=device, dtype=torch.long)
     adj_mat_edges = adj_mat_edges.to(device=device, dtype=torch.long)
-    scatter_idx = scatter_idx.to(device=device, dtype=torch.long)
 
     # Randomly assign each node to a group
     permutation = torch.randperm(num_nodes, device=device)
@@ -72,7 +71,7 @@ def group_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_mat_nodes, adj_
 
     group_adj_nodes = adj_mat_nodes[edge_mask]
     group_adj_edges = adj_mat_edges[edge_mask]
-    group_scatter_idx = scatter_idx[edge_mask]
+    group_edge_weights = edge_weights[edge_mask]
 
     return total_loss(
         batch_x,
@@ -81,5 +80,5 @@ def group_loss(batch_x, batch_dy_val, self_tree, inter_tree, adj_mat_nodes, adj_
         inter_tree,
         group_adj_nodes,
         group_adj_edges,
-        group_scatter_idx,
+        group_edge_weights,
     )

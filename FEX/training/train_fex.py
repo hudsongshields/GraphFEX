@@ -46,10 +46,7 @@ def train_network_fex(
     interaction_indices = nodes != edges
     nodes = nodes[interaction_indices].to(device)
     edges = edges[interaction_indices].to(device)
-
-    G = adj_matrix.size(0)
-    group_indices = torch.arange(G, device=device)
-    scatter_idx = (nodes.unsqueeze(1) == group_indices.unsqueeze(0)).int().argmax(dim=1)
+    edge_weights = adj_matrix[nodes, edges] # nonzero Aij values
 
     best_epoch_loss = float('inf')
 
@@ -71,9 +68,9 @@ def train_network_fex(
             adam_optim_inter.zero_grad()
 
             if num_groups > 1:
-                pred_batch_loss = group_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx, num_groups)
+                pred_batch_loss = group_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, edge_weights, num_groups)
             else:
-                pred_batch_loss = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
+                pred_batch_loss = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, edge_weights)
             if not torch.isfinite(pred_batch_loss):
                 continue
             batch_loss = pred_batch_loss
@@ -131,7 +128,7 @@ def train_network_fex(
             accumulated_loss = 0.0
             valid_batches = 0
             for batch_x, batch_dy_val in bfgs_batches:
-                pred_error = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, scatter_idx)
+                pred_error = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, edge_weights)
                 if not torch.isfinite(pred_error):
                     continue
                 valid_batches += 1
@@ -154,7 +151,7 @@ def train_network_fex(
                 inter_dynam_tree,
                 nodes,
                 edges,
-                scatter_idx
+                edge_weights,
             ).item()
             for batch_x, batch_dy_val in bfgs_batches 
         ]
@@ -267,154 +264,3 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device=runtimeconfig.
         print(f"fex operator sequence: {forcing_tree.sample_indices}")
     return best_epoch_loss
         
-
-
-if __name__ == "__main__":
-    from torch.utils.data import DataLoader, TensorDataset
-    from ..utils.tree_configs import get_tree_config
-    import pandas as pd
-    import numpy as np
-    from ..utils.numerical_deriv import NumericalDeriv
-    from .tree_helpers import visualize_tree
-    from .debug import debug_tree_configs
-
-    run_str = "debugging/did_i_break_something9"
-    save_path = Path(f"FEX/training/testing/{run_str}/final_inter_tree.png")
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-
-    adj_matrix = pd.read_csv('HR/data/BA_Nnodes100_Adj_deg_7_1.csv', header=None)
-    num_graph_nodes = adj_matrix.shape[0]
-
-    x_df = pd.read_csv('HR/data/HR_timeseries_SNR_40.csv', header=None)
-    num_timesteps, num_cols = x_df.shape
-    x_np = x_df.to_numpy(dtype=np.float32)
-    x_data = torch.from_numpy(x_np.reshape(num_timesteps, num_graph_nodes, 3))
-
-    dt = 0.01
-    len_run = 500
-    per_run_timesteps = int(len_run / dt)
-    resolution_factor = 1
-    dt = dt * resolution_factor
-
-    num_runs = num_timesteps // per_run_timesteps
-    x_chunks = torch.chunk(x_data, num_runs, dim=0)
-    all_dx_dt = []
-    all_x = []
-
-    for x_run in x_chunks:
-        x_run = x_run[::resolution_factor]
-        dx_dt = NumericalDeriv(x_run, dt=dt) # 4th order
-        x_run = x_run[2:-2]
-        all_dx_dt.append(dx_dt)
-        all_x.append(x_run)
-    all_x = all_x[:1] # take the first 1 run only
-    all_dx_dt = all_dx_dt[:1] # take the first 1 run only
-    dx_dt = torch.cat(all_dx_dt, dim=0)
-    x_data = torch.cat(all_x, dim=0)
-
-
-
-    train_x_data = x_data[:, :, :]
-    train_dx_dt = dx_dt[:, :, :]
-    print(f"Training data shape: {train_x_data.shape}, Training dx/dt shape: {train_dx_dt.shape}")
-    adj_matrix_tensor = torch.tensor(adj_matrix.values, dtype=torch.float32).to(runtimeconfig.device)
-    x_data_tensor_ds = TensorDataset(train_x_data, train_dx_dt)
-    if runtimeconfig.device == "cuda":
-        dataloader = DataLoader(x_data_tensor_ds, batch_size=512, shuffle=True, pin_memory=True)
-    else:
-        dataloader = DataLoader(x_data_tensor_ds, batch_size=512, shuffle=True)
-
-    log_path = f"{str(save_path.parent)}/ground_truth_test.log"
-    runtimeconfig.CreateLogger(log_path, name="train_logger")
-
-    forcing_tree_config = get_tree_config("depth_3_leaves_4_config")
-    inter_tree_config = get_tree_config("depth_2_tree_config")
-
-    fex_config = FEXConfig(
-        num_epochs=5000,
-        bfgs_epochs=0,
-        lr=0.02,
-        inter_lr=0.02,
-        lr_decay=0.1,
-
-        bfgs_lr=0.1,
-        leaf_dim=x_data.shape[2],
-        num_leaves=forcing_tree_config.num_leaves,
-
-    )
-    fex_config.leaf_entropy_weight = 0.0
-    fex_config.decay_entropy_until = 0.0
-    fex_config.mag_entropy_weight = 0.0
-
-    fex_config.pct_cosine_restart = 1.0
-    
-
-
-    forcing_op_indices = torch.tensor([0, 0, 0, 0, 1, 2, 0], dtype=torch.long).to(runtimeconfig.device)
-    forcing_fex = FEX(
-        sample_indices=forcing_op_indices,
-        leaf_dim=fex_config.leaf_dim,
-        num_leaves=forcing_tree_config.num_leaves,
-        tree_structure=forcing_tree_config,
-    ).to(runtimeconfig.device)
-
-    inter_op_indices = torch.tensor([1, 0, 3], dtype=torch.long).to(runtimeconfig.device)
-    inter_fex = FEX(
-        sample_indices=inter_op_indices,
-        leaf_dim=fex_config.leaf_dim * 2,
-        num_leaves=inter_tree_config.num_leaves,
-        tree_structure=inter_tree_config,
-    ).to(runtimeconfig.device)
-
-    """ FOR DEBUGGING """
-    
-    """    forcing_fex = None
-    inter_fex = None
-    forcing_fex = debug_tree_configs.build_debug_dx_forcing_fex(node_dim=fex_config.leaf_dim, device=runtimeconfig.device)
-    inter_fex = debug_tree_configs.build_debug_interaction_fex(node_dim=fex_config.leaf_dim, device=runtimeconfig.device)
-
-    #freeze all tree params
-    for param in forcing_fex.all_parameters():
-        param.requires_grad = False
-    for param in inter_fex.all_parameters():
-        param.requires_grad = False
-    
-    
-    # set to random only this param to test if can recover
-    with torch.no_grad():
-        cubed_term_node = forcing_fex.parent_node.left.right
-        # cubed_term_node.operation.a.fill_(torch.empty((1)).uniform_(-2.0, -1.0).item())
-
-        # fill random to see if can recover
-        fill_val = torch.randn((1,)).item() * 0.1
-        forcing_fex.leaf_mlps[1].logits.fill_(fill_val)
-
-
-    forcing_fex.leaf_mlps[1].logits.requires_grad = True
-    cubed_term_node.operation.a.requires_grad = True"""
-    
-
-    loss = 0.0
-    loss_history = []
-    coeff_history = []
-    try:
-        loss = train_network_fex(forcing_fex, inter_fex, dataloader, adj_matrix_tensor, fex_config, verbose=True)
-    except KeyboardInterrupt:
-        print("\nTraining interrupted, saving current state")
-        loss = float('inf')
-    finally:
-        reward = 1/np.sqrt(1 + loss)
-        visualize_tree(forcing_fex, f"{str(save_path.parent)}/final_forcing_tree.png")
-        visualize_tree(inter_fex, f"{str(save_path.parent)}/final_inter_tree.png")
-
-        from ..utils.pools import GraphPool, GraphPoolCandidate
-        pool_candidate = GraphPoolCandidate(
-            forcing_tree=forcing_fex.copy_inorder(),
-            inter_tree=inter_fex.copy_inorder(),
-            reward=reward,
-            id=0
-        )
-        graph_pool = GraphPool(pool_size=1)
-        graph_pool.add_new(candidate=pool_candidate)
-        graph_pool.save_candidates(directory=f"{str(save_path.parent)}", clear_directory=False)
-        print(f"Saved to {save_path.parent}")

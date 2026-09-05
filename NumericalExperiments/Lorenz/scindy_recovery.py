@@ -10,7 +10,7 @@ np.random.seed(seed)
 torch.manual_seed(seed) 
 if torch.cuda.is_available(): 
     torch.cuda.manual_seed_all(seed) 
-from FEX.models import fex 
+from FEX.utils import fex 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 from NumericalExperiments.Lorenz.generate_data import make_adjacency, make_data
     

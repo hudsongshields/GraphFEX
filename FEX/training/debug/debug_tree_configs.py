@@ -1,7 +1,7 @@
 import torch
 
 from ...models.learnable_tree import FEX
-from ...utils.tree_configs import get_tree_config
+from ...helpers.tree_configs import get_tree_config
 
 def set_mag(node, mag, sign):
     with torch.no_grad():

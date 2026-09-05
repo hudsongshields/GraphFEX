@@ -6,10 +6,10 @@ import matplotlib.pyplot as plt
 import random
 
 
-from FEX.models import fex
+from FEX.utils import fex
 from experiments.HR.data.generate_data import make_static_sf_adjacency, make_timeseries
-from FEX.utils.plots import plot_dynamics
-from FEX.utils.metrics import sMAPE
+from FEX.helpers.plots import plot_dynamics
+from FEX.helpers.metrics import sMAPE
 
 def main():
     parser = argparse.ArgumentParser()
