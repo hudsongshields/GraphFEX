@@ -79,7 +79,9 @@ class GraphPool:
         if node1.operation_type == "leaf" and node2.operation_type == "leaf":
             return True
 
-        if node1.op.__name__ != node2.op.__name__:
+        op1 = getattr(node1.operation, "op", node1.operation)
+        op2 = getattr(node2.operation, "op", node2.operation)
+        if getattr(op1, "__name__", str(op1)) != getattr(op2, "__name__", str(op2)):
             return False
 
         if (node1.left is None) != (node2.left is None):
@@ -208,18 +210,29 @@ class GraphPool:
             inter_num_leaves = infer_num_leaves(inter_ckpt, inter_state)
             forcing_num_leaves = infer_num_leaves(forcing_ckpt, forcing_state)
 
+            inter_sample_indices = (
+                inter_state.get("_meta_sample_indices")
+                if isinstance(inter_state, dict)
+                else None
+            )
+            forcing_sample_indices = (
+                forcing_state.get("_meta_sample_indices")
+                if isinstance(forcing_state, dict)
+                else None
+            )
+
             inter_tree = FEX(
                 leaf_dim=inter_leaf_dim,
                 num_leaves=inter_num_leaves,
-                tree_structure=inter_tree_config.tree_func,
-                sample_indices=inter_ckpt.get("_meta_sample_indices", None) if isinstance(inter_ckpt, dict) else None,
+                tree_structure=inter_tree_config,
+                sample_indices=inter_sample_indices,
             )
 
             forcing_tree = FEX(
                 leaf_dim=forcing_leaf_dim,
                 num_leaves=forcing_num_leaves,
-                tree_structure=forcing_tree_config.tree_func,
-                sample_indices=forcing_ckpt.get("_meta_sample_indices", None) if isinstance(forcing_ckpt, dict) else None,
+                tree_structure=forcing_tree_config,
+                sample_indices=forcing_sample_indices,
             )
 
             inter_tree.load_state_dict(inter_state, strict=False)

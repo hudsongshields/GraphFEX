@@ -49,7 +49,7 @@ class CoupledFEX():
         self.device = device
         if self.best_model is not None:
             self.best_model.forcing_tree.to(device)
-            self.best_model.inter_fex.to(device)
+            self.best_model.inter_tree.to(device)
         return self
 
 
@@ -60,14 +60,36 @@ class CoupledFEX():
 
 
 
-    def fit(self, data, target, adjacency, batch_size=64, num_workers=2, finetune_bs=128, num_groups=1):
+    def fit(
+        self,
+        data,
+        target,
+        adjacency,
+        batch_size=64,
+        num_workers=2,
+        finetune_bs=128,
+        num_groups=1,
+        rbm_reweight=False,
+        score_nodes=None,
+    ):
         dataloader = DataLoader(
             TensorDataset(data, target),
             batch_size=batch_size,
             shuffle=True,
             pin_memory=self.device == "cuda",
         )
-        best_candidates = train_network_controller(self.self_fex_struct, self.inter_fex_struct, dataloader, adjacency, self.controller_config, self.fex_config, num_workers=num_workers, num_groups=num_groups)
+        best_candidates = train_network_controller(
+            self.self_fex_struct,
+            self.inter_fex_struct,
+            dataloader,
+            adjacency,
+            self.controller_config,
+            self.fex_config,
+            num_workers=num_workers,
+            num_groups=num_groups,
+            rbm_reweight=rbm_reweight,
+            score_nodes=score_nodes,
+        )
         self.fex_config.num_epochs = self.finetune_epochs
         self.fex_config.lr = self.finetune_lr
         self.fex_config.inter_lr = self.finetune_lr

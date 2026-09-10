@@ -16,6 +16,13 @@ def _expression_summary(tree: FEX):
     return str(tree)
 
 
+def _clone_fex_state(tree: FEX) -> dict:
+    return {
+        key: value.detach().clone() if torch.is_tensor(value) else value
+        for key, value in tree.state_dict().items()
+    }
+
+
 def train_network_fex(
     forcing_tree: FEX,
     inter_dynam_tree: FEX,
@@ -24,6 +31,8 @@ def train_network_fex(
     config: FEXConfig,
     *,
     num_groups=1,
+    rbm_reweight: bool = False,
+    score_nodes=None,
     device="cuda" if torch.cuda.is_available() else "cpu",
     verbose: bool = False,
     log_every: int = 0,
@@ -47,8 +56,19 @@ def train_network_fex(
     nodes = nodes[interaction_indices].to(device)
     edges = edges[interaction_indices].to(device)
     edge_weights = adj_matrix[nodes, edges] # nonzero Aij values
+    score_nodes_tensor = None
+    if score_nodes is not None:
+        score_nodes_tensor = torch.as_tensor(score_nodes, device=device, dtype=torch.long)
+        score_node_mask = torch.zeros(adj_matrix.size(0), device=device, dtype=torch.bool)
+        score_node_mask[score_nodes_tensor] = True
+        edge_keep = score_node_mask[nodes]
+        nodes = nodes[edge_keep]
+        edges = edges[edge_keep]
+        edge_weights = edge_weights[edge_keep]
 
     best_epoch_loss = float('inf')
+    best_forcing_state = None
+    best_inter_state = None
 
     inter_dynam_tree.train()
     forcing_tree.train()
@@ -68,9 +88,29 @@ def train_network_fex(
             adam_optim_inter.zero_grad()
 
             if num_groups > 1:
-                pred_batch_loss = group_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, edge_weights, num_groups)
+                pred_batch_loss = group_loss(
+                    batch_x,
+                    batch_dy_val,
+                    forcing_tree,
+                    inter_dynam_tree,
+                    nodes,
+                    edges,
+                    edge_weights,
+                    num_groups,
+                    reweight_edges=rbm_reweight,
+                    score_nodes=score_nodes_tensor,
+                )
             else:
-                pred_batch_loss = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, edge_weights)
+                pred_batch_loss = total_loss(
+                    batch_x,
+                    batch_dy_val,
+                    forcing_tree,
+                    inter_dynam_tree,
+                    nodes,
+                    edges,
+                    edge_weights,
+                    score_nodes=score_nodes_tensor,
+                )
             if not torch.isfinite(pred_batch_loss):
                 continue
             batch_loss = pred_batch_loss
@@ -88,6 +128,8 @@ def train_network_fex(
 
         if mean_epoch_pred_loss < best_epoch_loss:
             best_epoch_loss = mean_epoch_pred_loss
+            best_forcing_state = _clone_fex_state(forcing_tree)
+            best_inter_state = _clone_fex_state(inter_dynam_tree)
 
 
         if log_every > 0 and (
@@ -106,6 +148,7 @@ def train_network_fex(
             all_parameters,
             lr=config.bfgs_lr,
             max_iter=config.bfgs_epochs,
+            line_search_fn="strong_wolfe",
         )
 
         # Prebuild train set for LBFGS closure
@@ -128,7 +171,16 @@ def train_network_fex(
             accumulated_loss = 0.0
             valid_batches = 0
             for batch_x, batch_dy_val in bfgs_batches:
-                pred_error = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, edge_weights)
+                pred_error = total_loss(
+                    batch_x,
+                    batch_dy_val,
+                    forcing_tree,
+                    inter_dynam_tree,
+                    nodes,
+                    edges,
+                    edge_weights,
+                    score_nodes=score_nodes_tensor,
+                )
                 if not torch.isfinite(pred_error):
                     continue
                 valid_batches += 1
@@ -136,29 +188,38 @@ def train_network_fex(
 
             if valid_batches == 0:
                 return torch.tensor(float('inf'), device=device)
-            accumulated_loss.backward()
-            return accumulated_loss / valid_batches
+            mean_loss = accumulated_loss / valid_batches
+            mean_loss.backward()
+            return mean_loss
 
         bfgs_optim.step(closure)
 
         forcing_tree.eval()
         inter_dynam_tree.eval()
-        final_pred_losses = [
-            total_loss(
-                batch_x,
-                batch_dy_val,
-                forcing_tree,
-                inter_dynam_tree,
-                nodes,
-                edges,
-                edge_weights,
-            ).item()
-            for batch_x, batch_dy_val in bfgs_batches 
-        ]
+        with torch.no_grad():
+            final_pred_losses = [
+                total_loss(
+                    batch_x,
+                    batch_dy_val,
+                    forcing_tree,
+                    inter_dynam_tree,
+                    nodes,
+                    edges,
+                    edge_weights,
+                    score_nodes=score_nodes_tensor,
+                ).item()
+                for batch_x, batch_dy_val in bfgs_batches
+            ]
 
         bfgs_loss_val = sum(final_pred_losses) / len(final_pred_losses) 
         if bfgs_loss_val < best_epoch_loss:
             best_epoch_loss = bfgs_loss_val
+            best_forcing_state = _clone_fex_state(forcing_tree)
+            best_inter_state = _clone_fex_state(inter_dynam_tree)
+
+    if best_forcing_state is not None and best_inter_state is not None:
+        forcing_tree.load_state_dict(best_forcing_state, strict=False)
+        inter_dynam_tree.load_state_dict(best_inter_state, strict=False)
     
     if log_every > 0:
         print(
@@ -177,6 +238,7 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device="cuda" if torc
 
 
     best_epoch_loss = float('inf')
+    best_forcing_state = None
     for epoch in range(config.num_epochs):
         epoch_loss = 0.0
         num_batches = 0
@@ -196,8 +258,12 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device="cuda" if torc
             epoch_loss += loss.item()
             num_batches += 1
         
-        if epoch_loss / num_batches < best_epoch_loss:
-            best_epoch_loss = epoch_loss / max(1, num_batches)
+        if num_batches == 0:
+            continue
+        mean_epoch_loss = epoch_loss / num_batches
+        if mean_epoch_loss < best_epoch_loss:
+            best_epoch_loss = mean_epoch_loss
+            best_forcing_state = _clone_fex_state(forcing_tree)
             
         if every_n_epochs and (epoch+1) % every_n_epochs == 0:
             print(f"Epoch {epoch+1}, Loss: {epoch_loss/max(1, num_batches):.4f}")
@@ -239,9 +305,10 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device="cuda" if torc
 
             if valid_batches == 0:
                 return torch.tensor(float('inf'), device=device)
-            accumulated_loss.backward()
+            mean_loss = accumulated_loss / max(1, valid_batches)
+            mean_loss.backward()
             
-            return accumulated_loss / max(1, valid_batches)
+            return mean_loss
 
         bfgs_optim.step(closure)
 
@@ -257,6 +324,10 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device="cuda" if torc
         bfgs_loss_val = sum(final_pred_losses) / len(final_pred_losses) 
         if best_epoch_loss > bfgs_loss_val:
             best_epoch_loss = bfgs_loss_val
+            best_forcing_state = _clone_fex_state(forcing_tree)
+
+    if best_forcing_state is not None:
+        forcing_tree.load_state_dict(best_forcing_state, strict=False)
 
     if every_n_epochs > 0:
         print(f"Final FEX: {_expression_summary(forcing_tree)}")
