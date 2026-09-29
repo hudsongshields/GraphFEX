@@ -38,7 +38,9 @@ def total_loss(batch_x, batch_dy_val, self_tree, inter_tree=None, adj_mat_nodes=
         inter_sources = batch_x[:, adj_mat_nodes, :]
         inter_edges = batch_x[:, adj_mat_edges, :]
         edge_inputs = torch.cat([inter_sources, inter_edges], dim=-1)
-        inter_out = inter_tree(edge_inputs.reshape(B * num_edges, -1)).reshape(B, num_edges, 1) * edge_weights.view(1, num_edges, 1)
+        inter_out = inter_tree(edge_inputs.reshape(B * num_edges, -1)).reshape(B, num_edges, 1)
+        # if edge_weights is not None:
+        #     inter_out = inter_out * edge_weights.view(1, num_edges, 1)
 
         local_idx = adj_mat_nodes.view(1, num_edges, 1).expand(B, num_edges, 1)
         interaction_out = torch.zeros(B, G, 1, device=batch_x.device, dtype=forcing_out.dtype)

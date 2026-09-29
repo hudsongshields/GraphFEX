@@ -1546,8 +1546,8 @@ def Coupled_Fractional_functions(TimeSeries, dim, Nnodes, A, Fractional = True):
 def Coupled_Activation_functions(TimeSeries, dim, Nnodes, A, Sigmoid = True, Tanh = True, Regulation = True):
     Timelength = np.size(TimeSeries, 0)
     dim_multi_Nnodes = np.size(TimeSeries, 1)
-    alpha = [10]
-    beta = [1]
+    alpha = [1]
+    beta = [0]
     gamma = [1,2,5]
     Numfunc = len(alpha)*len(beta)
 

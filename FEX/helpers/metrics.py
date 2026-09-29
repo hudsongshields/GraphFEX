@@ -11,16 +11,16 @@ def coefficient_map(expr: str) -> dict:
     return coefficients
 
 def sMAPE(true_expr: str, pred_expr: str) -> float:
+    """sMAPE over terms in the true expression only; extra terms the model predicts are not penalized."""
     true_coeffs = coefficient_map(true_expr)
     pred_coeffs = coefficient_map(pred_expr)
-    all_terms = true_coeffs.keys() | pred_coeffs.keys()
+    true_terms = true_coeffs.keys()
 
-    if not all_terms:
+    if not true_terms:
         return 0.0
 
-    print("All terms:", all_terms)
     smape_total = 0.0
-    for term in all_terms:
+    for term in true_terms:
         true_val = float(true_coeffs.get(term, 0))
         pred_val = float(pred_coeffs.get(term, 0))
         denominator = abs(true_val) + abs(pred_val)
@@ -28,4 +28,4 @@ def sMAPE(true_expr: str, pred_expr: str) -> float:
         if denominator != 0:
             smape_total += abs(pred_val - true_val) / denominator
 
-    return 100.0 * smape_total / len(all_terms)
+    return 100.0 * smape_total / len(true_terms)

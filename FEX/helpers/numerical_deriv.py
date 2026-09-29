@@ -1,12 +1,14 @@
 import torch
 
 def five_point(timeseries, dt):
-    return ((
-        timeseries[:-4, :, :]         # t-2
-        - 8 * timeseries[1:-3, :, :]  # t-1
-        + 8 * timeseries[3:-1, :, :]  # t+1
-        - timeseries[4:, :, :]        # t+2
-    ) / (12 * dt))
+    return (
+        timeseries[2:-2],
+        (
+            timeseries[:-4, :, :]         # t-2
+            - 8 * timeseries[1:-3, :, :]  # t-1
+            + 8 * timeseries[3:-1, :, :]  # t+1
+            - timeseries[4:, :, :]        # t+2
+        ) / (12 * dt))
 
 import numpy as np
 import pysindy as ps

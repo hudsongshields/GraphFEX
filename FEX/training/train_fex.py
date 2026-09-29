@@ -32,18 +32,15 @@ def train_network_fex(
     forcing_tree.train()
     inter_dynam_tree = inter_dynam_tree.to(device)
     inter_dynam_tree.train()
-    forcing_tree_params = list(forcing_tree.all_parameters())
-    inter_tree_params = list(inter_dynam_tree.all_parameters())
 
-
-    adam_optim_self = torch.optim.Adam(forcing_tree_params, lr=config.lr)
-    adam_optim_inter = torch.optim.Adam(inter_tree_params, lr=config.inter_lr)
+    adam_optim_self = torch.optim.Adam(forcing_tree.parameters(), lr=config.lr)
+    adam_optim_inter = torch.optim.Adam(inter_dynam_tree.parameters(), lr=config.inter_lr)
 
 
     # Precompute edge indices - used by both group_loss
     adj_matrix = adj_matrix.to(device)
     nodes, edges = adj_matrix.nonzero(as_tuple=True)
-    interaction_indices = nodes != edges
+    interaction_indices = nodes != edges # remove diagonal
     nodes = nodes[interaction_indices].to(device)
     edges = edges[interaction_indices].to(device)
     edge_weights = adj_matrix[nodes, edges] # nonzero Aij values
@@ -101,11 +98,12 @@ def train_network_fex(
             )
     
     if config.bfgs_epochs > 0:
-        all_parameters = list(forcing_tree.all_parameters()) + list(inter_dynam_tree.all_parameters())
+        all_parameters = list(forcing_tree.parameters()) + list(inter_dynam_tree.parameters())
         bfgs_optim = torch.optim.LBFGS(
             all_parameters,
             lr=config.bfgs_lr,
             max_iter=config.bfgs_epochs,
+            line_search_fn="strong_wolfe"
         )
 
         # Prebuild train set for LBFGS closure
@@ -172,8 +170,7 @@ def train_network_fex(
 def train_fex(forcing_tree, dataloader, config: FEXConfig, device="cuda" if torch.cuda.is_available() else "cpu", verbose=False, every_n_epochs=0):
     forcing_tree.train()
     forcing_tree = forcing_tree.to(device)
-    forcing_tree_params = forcing_tree.all_parameters()
-    optim = torch.optim.Adam(forcing_tree_params, lr=config.lr)
+    optim = torch.optim.Adam(forcing_tree.parameters(), lr=config.lr)
 
 
     best_epoch_loss = float('inf')
@@ -203,7 +200,7 @@ def train_fex(forcing_tree, dataloader, config: FEXConfig, device="cuda" if torc
             print(f"Epoch {epoch+1}, Loss: {epoch_loss/max(1, num_batches):.4f}")
 
     if config.bfgs_epochs > 0:
-        all_parameters = list(forcing_tree.all_parameters())
+        all_parameters = list(forcing_tree.parameters())
         bfgs_optim = torch.optim.LBFGS(
             all_parameters,
             lr=config.bfgs_lr,

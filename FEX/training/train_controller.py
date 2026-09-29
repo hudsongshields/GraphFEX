@@ -71,7 +71,7 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     if not math.isfinite(score):
         reward = 0.0
     else:
-        reward = 1.0 / math.sqrt(1.0 + score)
+        reward = 1.0 / (1.0 + score)
 
     for param in forcing_fex.parameters():
         param.requires_grad = False
@@ -83,7 +83,7 @@ def eval_candidate(k_cand, gpu_id, op_indices):
         inter_fex = inter_fex.cpu()
 
     forcing_fex = forcing_fex.cpu()
-    return op_indices, reward, k_cand
+    return op_indices, reward, k_cand, forcing_fex, inter_fex
 
 
 def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, adj_matrix, fex_config, logger_path=None, num_groups=1):
@@ -166,10 +166,8 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
             results = contextpool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
             t2 = time.time()
             print(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
-            for op_indices, reward, k_cand in results:
-                inter_tree = FEX(sample_indices=op_indices[len(self_ops_per_node):], **inter_fex_kwargs)
-                forcing_tree = FEX(sample_indices=op_indices[:len(self_ops_per_node)], **fex_kwargs)
-                candidate = GraphPoolCandidate(inter_tree=inter_tree, forcing_tree=forcing_tree, reward=reward, id=int(k_cand + epoch * config.num_cands_per_epoch))
+            for op_indices, reward, k_cand, forcing_fex, inter_fex in results:
+                candidate = GraphPoolCandidate(inter_tree=inter_fex, forcing_tree=forcing_fex, reward=reward, id=int(k_cand + epoch * config.num_cands_per_epoch))
                 top_epoch_cands.add_new(candidate)
 
             print(f"Epoch {epoch} pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
@@ -186,9 +184,6 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
 
             for candidate in top_epoch_cands:
                 best_candidates.add_new(candidate)
-            if checkpoint_dir is not None:
-                best_candidates.save_candidates(str(checkpoint_dir / "best_candidates"))
-                best_candidates.visualize_candidates(str(checkpoint_dir / "visualizations"))
 
 
     return best_candidates
@@ -250,9 +245,8 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
             results = contextpool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
             t2 = time.time()
             print(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
-            for op_indices, reward, k_cand in results:
-                forcing_tree = FEX(sample_indices=op_indices, **fex_kwargs)
-                candidate = PoolCandidate(tree=forcing_tree, reward=reward, id=int(k_cand + epoch * controller_config.num_cands_per_epoch))
+            for op_indices, reward, k_cand, forcing_fex, _ in results:
+                candidate = PoolCandidate(tree=forcing_fex, reward=reward, id=int(k_cand + epoch * controller_config.num_cands_per_epoch))
                 top_epoch_cands.add_new(candidate)
 
             print(f"Epoch {epoch}, pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")

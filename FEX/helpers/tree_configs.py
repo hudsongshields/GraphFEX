@@ -142,6 +142,32 @@ def ops_per_depth_4():
         len(UNARY_OPS),   # l1_branch2
     ]
 
+def partial_depth_4_leaves_4(sample_indices):
+
+    leaf1 = Node(operation_type="leaf", leaf_idx=0, name="leaf1", operation=None)
+    leaf2 = Node(operation_type="leaf", leaf_idx=1, name="leaf2", operation=None)
+    leaf3 = Node(operation_type="leaf", leaf_idx=2, name="leaf3", operation=None)
+    leaf4 = Node(operation_type="leaf", leaf_idx=3, name="leaf4", operation=None)
+
+    l3_branch1 = Node(operation_type="unary", operation=UNARY_OPS[sample_indices[3]], left=leaf1, name="l3_branch1")
+    l3_branch2 = Node(operation_type="unary", operation=UNARY_OPS[sample_indices[4]], left=leaf2, name="l3_branch2")
+    l3_branch3 = Node(operation_type="unary", operation=UNARY_OPS[sample_indices[5]], left=leaf3, name="l3_branch3")
+    l3_branch4 = Node(operation_type="unary", operation=UNARY_OPS[sample_indices[6]], left=leaf4, name="l3_branch4")
+
+    # Deep branch
+    l2_branch1 = Node(operation_type="binary", operation=BINARY_OPS[sample_indices[2]], left=l3_branch3, right=l3_branch4, name="l2_branch1")
+
+    # Combine one unary branch with the deeper branch
+    l1_branch1 = Node(operation_type="binary", operation=BINARY_OPS[sample_indices[1]], left=l3_branch2, right=l2_branch1, name="l1_branch1")
+
+    # Root combines shallow linear branch with nonlinear branch
+    parent_node = Node(operation_type="binary", operation=BINARY_OPS[sample_indices[0]], left=l3_branch1, right=l1_branch1, name="parent_node")
+
+    return parent_node
+def ops_per_partial_depth_4_leaves_4():
+    return [len(BINARY_OPS), len(BINARY_OPS), len(BINARY_OPS), len(UNARY_OPS), len(UNARY_OPS), len(UNARY_OPS), len(UNARY_OPS)]
+
+
 def depth_1(sample_indices):
     leaf1 = Node(operation_type="leaf", leaf_idx=0, name="leaf1", operation=None)
     parent_node = Node(operation_type="unary", operation=UNARY_OPS[sample_indices[0]], left=leaf1, name="parent_node")
@@ -185,6 +211,7 @@ depth_2_tree_config = TreeConfig(tree_func=depth_2_tree, ops_per_node_func=ops_p
 depth_3_tree_config = TreeConfig(tree_func=depth_3, ops_per_node_func=ops_per_depth_3, num_leaves=2)
 depth_4_tree_config = TreeConfig(tree_func=depth_4, ops_per_node_func=ops_per_depth_4, num_leaves=4)
 depth_3_leaves_4_config = TreeConfig(tree_func=depth_3_leaves_4, ops_per_node_func=ops_per_depth_3_leaves_4, num_leaves=4)
+depth_4_partial_config = TreeConfig(tree_func=partial_depth_4_leaves_4, ops_per_node_func=ops_per_partial_depth_4_leaves_4, num_leaves=4)
 
 
 TREE_CONFIGS = {
@@ -194,6 +221,7 @@ TREE_CONFIGS = {
     "depth_4_tree_config": depth_4_tree_config,
     "depth_3_leaves_4_config": depth_3_leaves_4_config,
     "depth_3_partial_config": TreeConfig(tree_func=depth_3_partial, ops_per_node_func=ops_per_depth_3_partial, num_leaves=3),
+    "depth_4_partial_config": depth_4_partial_config,
 
     "test_config": TreeConfig(tree_func=test_config, ops_per_node_func=ops_per_test_config, num_leaves=2),
 }

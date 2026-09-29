@@ -49,7 +49,7 @@ class CoupledFEX():
         self.device = device
         if self.best_model is not None:
             self.best_model.forcing_tree.to(device)
-            self.best_model.inter_fex.to(device)
+            self.best_model.inter_tree.to(device)
         return self
 
 
@@ -80,7 +80,15 @@ class CoupledFEX():
                 pin_memory=self.device == "cuda",
             )
         for candidate in best_candidates:
-            loss = train_network_fex(candidate.forcing_tree, candidate.inter_tree, dataloader, adjacency, self.fex_config, verbose=True, log_every=100)
+            forcing_tree = candidate.forcing_tree
+            inter_tree = candidate.inter_tree
+            for param in forcing_tree.parameters():
+                param.requires_grad = True
+            for param in inter_tree.parameters():
+                param.requires_grad = True
+            # forcing_tree.compile()
+            # inter_tree.compile()
+            loss = train_network_fex(forcing_tree, inter_tree, dataloader, adjacency, self.fex_config, verbose=True, log_every=100)
             candidate.reward = 1 / (1 + loss)
 
         self.best_model = max(best_candidates, key=lambda c: c.reward)
@@ -127,9 +135,13 @@ class CoupledFEX():
             predictions = self_fex(x).squeeze(-1)
 
             self_nodes, neighbor_nodes = adjacency.nonzero(as_tuple=True)
+            interaction_mask = self_nodes != neighbor_nodes
+            self_nodes = self_nodes[interaction_mask]
+            neighbor_nodes = neighbor_nodes[interaction_mask]
+            edge_weights = adjacency[self_nodes, neighbor_nodes]
 
             inter_input = torch.cat((x[self_nodes], x[neighbor_nodes]), dim=1)
-            inter_predictions = inter_fex(inter_input).squeeze(-1)
+            inter_predictions = inter_fex(inter_input).squeeze(-1) * edge_weights
             predictions.index_add_(0, self_nodes, inter_predictions)
 
         return predictions.unsqueeze(-1)
@@ -170,7 +182,7 @@ class SingleFEX():
     def to(self, device):
         self.device = device
         if self.best_model is not None:
-            self.best_model.forcing_tree.to(device)
+            self.best_model.tree.to(device)
         return self
 
     def fit(self, data, target, batch_size=64, num_workers=None):
@@ -188,6 +200,8 @@ class SingleFEX():
         self.fex_config.inter_lr = self.finetune_lr
         for candidate in best_candidates:
             self_fex = candidate.tree
+            for param in self_fex.parameters():
+                param.requires_grad = True
             loss = train_fex(self_fex, dataloader, self.fex_config, self.device, every_n_epochs=100)
             updated_reward = 1/(1 + loss)
             candidate.reward = updated_reward
@@ -207,7 +221,7 @@ class SingleFEX():
         self_fex = self.best_model.tree
         train_fex(self_fex, dataloader, self.fex_config, self.device, every_n_epochs=100)
 
-    def predict(self, x):
+    def predict(self, x, adjacency=None):
         x = x.to(self.device)
         fex = self.best_model.tree.to(self.device)
         fex.eval()
@@ -217,3 +231,26 @@ class SingleFEX():
     
     def __str__(self):
         return f"FEX = {self.best_model.tree}"
+
+
+
+def simulate(fexs, x, adjacency, timesteps, dt):
+    """x must be a single state snapshot of shape (num_nodes, state_dim); each fex predicts one state dimension."""
+    device = x.device
+    for fex in fexs:
+        fex.to(device)
+
+    def derivative(state):
+        return torch.cat([fex.predict(state, adjacency) for fex in fexs], dim=-1)
+
+    predictions = [x]
+    derivatives = [derivative(x)]
+    for t in range(timesteps):
+        k1 = derivatives[-1]
+        k2 = derivative(x + 0.5 * dt * k1)
+        k3 = derivative(x + 0.5 * dt * k2)
+        k4 = derivative(x + dt * k3)
+        x = x + dt * (k1 + 2 * k2 + 2 * k3 + k4) / 6
+        predictions.append(x)
+        derivatives.append(derivative(x))
+    return torch.stack(predictions, dim=0), torch.stack(derivatives, dim=0)

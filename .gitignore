@@ -25,7 +25,9 @@ HR/inter_test
 HR/sigmoid
 HR/default
 HR/logs*
+
 *.txt
+*.csv
 
 Point-Vortex/
 Rossler-Dynamics/
