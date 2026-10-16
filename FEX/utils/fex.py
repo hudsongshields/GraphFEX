@@ -70,6 +70,7 @@ class CoupledFEX():
         finetune_bs=128,
         num_groups=1,
         rbm_reweight=False,
+        grouping="random",
         score_nodes=None,
     ):
         dataloader = DataLoader(
@@ -88,6 +89,7 @@ class CoupledFEX():
             num_workers=num_workers,
             num_groups=num_groups,
             rbm_reweight=rbm_reweight,
+            grouping=grouping,
             score_nodes=score_nodes,
         )
         self.fex_config.num_epochs = self.finetune_epochs

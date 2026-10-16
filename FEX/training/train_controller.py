@@ -30,6 +30,7 @@ adj_matrix_global = None
 fex_config_global = None
 num_groups_global = 1
 rbm_reweight_global = False
+grouping_global = "random"
 score_nodes_global = None
 
 
@@ -61,6 +62,7 @@ def eval_candidate(k_cand, gpu_id, op_indices):
             num_groups=num_groups_global,
             config=fex_config_global,
             rbm_reweight=rbm_reweight_global,
+            grouping=grouping_global,
             score_nodes=score_nodes_global,
             device=device,
         )
@@ -99,10 +101,11 @@ def init_shared_resources(
     logger_path=None,
     num_groups=1,
     rbm_reweight=False,
+    grouping="random",
     score_nodes=None,
 ):
     global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs
-    global dataloader_global, adj_matrix_global, fex_config_global, num_groups_global, rbm_reweight_global, score_nodes_global
+    global dataloader_global, adj_matrix_global, fex_config_global, num_groups_global, rbm_reweight_global, grouping_global, score_nodes_global
 
     self_ops_per_node = self_ops
     inter_ops_per_node = inter_ops
@@ -114,6 +117,7 @@ def init_shared_resources(
     fex_config_global = fex_config
     num_groups_global = num_groups
     rbm_reweight_global = rbm_reweight
+    grouping_global = grouping
     score_nodes_global = score_nodes
 
 
@@ -128,18 +132,20 @@ def train_network_controller(
     *,
     num_groups=1,
     rbm_reweight: bool = False,
+    grouping: str = "random",
     score_nodes=None,
     checkpoint_dir: Path = None,
     num_workers: int = 2,
 ) -> GraphPool:
     num_gpus = torch.cuda.device_count()
     
-    global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, num_groups_global, rbm_reweight_global, score_nodes_global
+    global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, num_groups_global, rbm_reweight_global, grouping_global, score_nodes_global
     dataloader_global = dataloader
     adj_matrix_global = adj_matrix
     fex_config_global = fex_config
     num_groups_global = num_groups
     rbm_reweight_global = rbm_reweight
+    grouping_global = grouping
     score_nodes_global = score_nodes
 
     self_ops_per_node = self_fex_struct.ops_per_node
@@ -191,6 +197,7 @@ def train_network_controller(
             None,
             num_groups_global,
             rbm_reweight_global,
+            grouping_global,
             score_nodes_global,
         ),
     ) as contextpool:

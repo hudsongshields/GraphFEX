@@ -1,5 +1,6 @@
 
 from typing import List, Optional
+from ..helpers.maximin import maximin_group_ids
 from ..models.learnable_tree import FEX
 import torch
 import torch.nn.functional as F
@@ -86,6 +87,8 @@ def group_loss(
     *,
     reweight_edges: bool = False,
     score_nodes=None,
+    grouping: str = "random",
+    group_id=None,
 ):
     device = batch_x.device
     num_nodes = batch_x.size(1)
@@ -102,13 +105,19 @@ def group_loss(
     adj_mat_nodes = adj_mat_nodes.to(device=device, dtype=torch.long)
     adj_mat_edges = adj_mat_edges.to(device=device, dtype=torch.long)
 
-    # Randomly assign each node to a group
-    permutation = torch.randperm(num_nodes, device=device)
+    if grouping not in {"random", "maximin"}:
+        raise ValueError("grouping must be 'random' or 'maximin'")
 
-    group_id = torch.empty(num_nodes, device=device, dtype=torch.long)
-    group_id[permutation] = (
-        torch.arange(num_nodes, device=device, dtype=torch.long) * num_groups // num_nodes
-    )
+    if group_id is None:
+        if grouping == "maximin":
+            group_id = maximin_group_ids(num_nodes, adj_mat_nodes, adj_mat_edges, num_groups)
+        else:
+            permutation = torch.randperm(num_nodes, device=device)
+            group_id = torch.empty(num_nodes, device=device, dtype=torch.long)
+            group_id[permutation] = (
+                torch.arange(num_nodes, device=device, dtype=torch.long) * num_groups // num_nodes
+            )
+    group_id = group_id.to(device=device, dtype=torch.long)
     group_sizes = torch.bincount(group_id, minlength=num_groups)
 
     # Retain only edges whose endpoints belong to the same group
@@ -117,7 +126,10 @@ def group_loss(
     group_adj_nodes = adj_mat_nodes[edge_mask]
     group_adj_edges = adj_mat_edges[edge_mask]
     group_edge_weights = edge_weights[edge_mask]
-    if reweight_edges:
+    # The keep probability below is for a uniform random partition. A maximin
+    # partition puts each pair together either always or never, so that factor
+    # is not an importance weight.
+    if reweight_edges and grouping == "random":
         # A fixed pair of distinct nodes lands in the same random batch with
         # probability (s_b - 1) / (num_nodes - 1), where s_b is the retained
         # batch size.  Reweight retained edges so the sampled interaction sum is

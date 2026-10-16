@@ -6,6 +6,7 @@ from .train_configs import FEXConfig
 import torch
 import torch.nn.functional as F
 import math
+from ..helpers.maximin import maximin_group_ids
 from .loss_funcs import group_loss, total_loss
 from .tree_helpers import copy_fex_state_, get_noise_stds
 
@@ -32,6 +33,7 @@ def train_network_fex(
     *,
     num_groups=1,
     rbm_reweight: bool = False,
+    grouping: str = "random",
     score_nodes=None,
     device="cuda" if torch.cuda.is_available() else "cpu",
     verbose: bool = False,
@@ -56,6 +58,11 @@ def train_network_fex(
     nodes = nodes[interaction_indices].to(device)
     edges = edges[interaction_indices].to(device)
     edge_weights = adj_matrix[nodes, edges] # nonzero Aij values
+    fixed_group_id = None
+    if num_groups > 1 and grouping == "maximin":
+        fixed_group_id = maximin_group_ids(
+            adj_matrix.size(0), nodes, edges, num_groups
+        ).to(device)
     score_nodes_tensor = None
     if score_nodes is not None:
         score_nodes_tensor = torch.as_tensor(score_nodes, device=device, dtype=torch.long)
@@ -99,6 +106,8 @@ def train_network_fex(
                     num_groups,
                     reweight_edges=rbm_reweight,
                     score_nodes=score_nodes_tensor,
+                    grouping=grouping,
+                    group_id=fixed_group_id,
                 )
             else:
                 pred_batch_loss = total_loss(
