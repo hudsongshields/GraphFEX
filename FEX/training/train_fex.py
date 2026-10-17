@@ -20,6 +20,7 @@ def train_network_fex(
     forcing_tree: FEX,
     inter_dynam_tree: FEX,
     dataloader,
+    eval_loader,
     adj_matrix,
     config: FEXConfig,
     *,
@@ -83,9 +84,6 @@ def train_network_fex(
             continue
         mean_epoch_pred_loss = epoch_pred_loss / max(1, num_batches)
 
-        if mean_epoch_pred_loss < best_epoch_loss:
-            best_epoch_loss = mean_epoch_pred_loss
-
 
         if log_every > 0 and (
             (epoch + 1) % log_every == 0
@@ -97,75 +95,32 @@ def train_network_fex(
                 f"pred_loss={mean_epoch_pred_loss:.8e}, "
             )
     
-    if config.bfgs_epochs > 0:
-        all_parameters = list(forcing_tree.parameters()) + list(inter_dynam_tree.parameters())
-        bfgs_optim = torch.optim.LBFGS(
-            all_parameters,
-            lr=config.bfgs_lr,
-            max_iter=config.bfgs_epochs,
-            line_search_fn="strong_wolfe"
-        )
+    forcing_tree.eval()
+    inter_dynam_tree.eval()
+    final_pred_losses = [
+        total_loss(
+            batch_x.to(device),
+            batch_dy_val.to(device),
+            forcing_tree,
+            inter_dynam_tree,
+            nodes,
+            edges,
+            edge_weights,
+        ).item()
+        for batch_x, batch_dy_val[:, :, config.target_dim:config.target_dim+1] in eval_loader
+    ]
 
-        # Prebuild train set for LBFGS closure
-        bfgs_batches = []
-        for batch_x, batch_dy_val in dataloader:
-            batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim+1]
-
-            if device == 'cuda':
-                batch_x = batch_x.to(device, non_blocking=True)
-                batch_dy_val = batch_dy_val.to(device, non_blocking=True)
-            else:
-                batch_x = batch_x.to(device)
-                batch_dy_val = batch_dy_val.to(device)
-
-            bfgs_batches.append((batch_x, batch_dy_val))
-
-        def closure():
-            bfgs_optim.zero_grad()
-
-            accumulated_loss = 0.0
-            valid_batches = 0
-            for batch_x, batch_dy_val in bfgs_batches:
-                pred_error = total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, edge_weights)
-                if not torch.isfinite(pred_error):
-                    continue
-                valid_batches += 1
-                accumulated_loss = accumulated_loss + pred_error
-
-            if valid_batches == 0:
-                return torch.tensor(float('inf'), device=device)
-            accumulated_loss.backward()
-            return accumulated_loss / valid_batches
-
-        bfgs_optim.step(closure)
-
-        forcing_tree.eval()
-        inter_dynam_tree.eval()
-        final_pred_losses = [
-            total_loss(
-                batch_x,
-                batch_dy_val,
-                forcing_tree,
-                inter_dynam_tree,
-                nodes,
-                edges,
-                edge_weights,
-            ).item()
-            for batch_x, batch_dy_val in bfgs_batches 
-        ]
-
-        bfgs_loss_val = sum(final_pred_losses) / len(final_pred_losses) 
-        if bfgs_loss_val < best_epoch_loss:
-            best_epoch_loss = bfgs_loss_val
+    final_loss = sum(final_pred_losses) / len(final_pred_losses) 
     
     if log_every > 0:
         print(
-            f"loss={best_epoch_loss:.8e}"
+            f"loss={final_loss:.8e}"
             f"FEX sequence: {_expression_summary(forcing_tree)} FEX operator sequence: {forcing_tree.sample_indices}\n"
             f"Inter FEX sequence: {_expression_summary(inter_dynam_tree)} Inter FEX operator sequence: {inter_dynam_tree.sample_indices}\n"
         )
 
-    return float(best_epoch_loss)
+    return float(final_loss)
+
 
 def train_fex(forcing_tree, dataloader, config: FEXConfig, device="cuda" if torch.cuda.is_available() else "cpu", verbose=False, every_n_epochs=0):
     forcing_tree.train()

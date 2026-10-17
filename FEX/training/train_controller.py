@@ -55,6 +55,7 @@ def eval_candidate(k_cand, gpu_id, op_indices):
             forcing_fex,
             inter_fex,
             dataloader_global,
+            eval_loader_global,
             adj_matrix_global,
             num_groups=num_groups_global,
             config=fex_config_global,
@@ -86,9 +87,9 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     return op_indices, reward, k_cand, forcing_fex, inter_fex
 
 
-def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, adj_matrix, fex_config, logger_path=None, num_groups=1):
+def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, eval_loader, adj_matrix, fex_config, logger_path=None, num_groups=1):
     global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs
-    global dataloader_global, adj_matrix_global, fex_config_global, num_groups_global
+    global dataloader_global, eval_loader_global, adj_matrix_global, fex_config_global, num_groups_global
 
     self_ops_per_node = self_ops
     inter_ops_per_node = inter_ops
@@ -96,17 +97,19 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
     inter_fex_kwargs = inter_fex_kwargs_input
     
     dataloader_global = dataloader
+    eval_loader_global = eval_loader
     adj_matrix_global = adj_matrix
     fex_config_global = fex_config
     num_groups_global = num_groups
 
 
 
-def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, *, num_groups=1, checkpoint_dir: Path = None, num_workers: int = 2) -> GraphPool:
+def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, eval_loader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, *, num_groups=1, checkpoint_dir: Path = None, num_workers: int = 2) -> GraphPool:
     num_gpus = torch.cuda.device_count()
     
-    global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, num_groups_global
+    global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, num_groups_global, eval_loader_global
     dataloader_global = dataloader
+    eval_loader_global = eval_loader
     adj_matrix_global = adj_matrix
     fex_config_global = fex_config
     num_groups_global = num_groups
@@ -124,11 +127,13 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
     fex_kwargs = {
         "leaf_dim": next(iter(dataloader))[0].shape[2],
         "tree_structure": self_fex_struct,
+        "expression_threshold": fex_config.expression_threshold
     }
     fex_kwargs["num_leaves"] = self_fex_struct.num_leaves
     inter_fex_kwargs = {
         "leaf_dim": next(iter(dataloader))[0].shape[2] * 2,
         "tree_structure": inter_fex_struct,
+        "expression_threshold": fex_config.expression_threshold
     }
     inter_fex_kwargs["num_leaves"] = inter_fex_struct.num_leaves
     best_candidates = GraphPool(pool_size=config.poolsize)
@@ -146,7 +151,7 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
 
     context = mp.get_context("spawn")
     gpu_ids = list(range(num_gpus)) if num_gpus > 0 else [None]
-    with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, None, num_groups_global)) as contextpool:
+    with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, eval_loader_global, adj_matrix_global, fex_config_global, None, num_groups_global)) as contextpool:
         for epoch in range(config.num_epochs):
             optimizer.zero_grad()
             num_cands = config.num_cands_per_epoch

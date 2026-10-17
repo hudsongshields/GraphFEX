@@ -10,6 +10,7 @@ from ..models.learnable_tree import FEX
 import torch
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
+from sklearn import train_test_split
 
 class CoupledFEX():
     def __init__(self, self_fex_struct, inter_fex_struct, target_dim, *, 
@@ -54,27 +55,41 @@ class CoupledFEX():
 
 
     def init(self, fex_ops, inter_ops, leaf_dim):
-        fex_tree = FEX(leaf_dim=leaf_dim, sample_indices=fex_ops, tree_structure=self.self_fex_struct).to(self.device)
-        inter_tree = FEX(leaf_dim=leaf_dim*2, sample_indices=inter_ops, tree_structure=self.inter_fex_struct).to(self.device)
+        fex_tree = FEX(leaf_dim=leaf_dim, sample_indices=fex_ops, tree_structure=self.self_fex_struct, expression_threshold=self.fex_config.expression_threshold).to(self.device)
+        inter_tree = FEX(leaf_dim=leaf_dim*2, sample_indices=inter_ops, tree_structure=self.inter_fex_struct, expression_threshold=self.fex_config.expression_threshold).to(self.device)
         self.best_model = GraphPoolCandidate(id=0,forcing_tree=fex_tree, inter_tree=inter_tree, reward=100.0)
 
 
 
     def fit(self, data, target, adjacency, batch_size=64, num_workers=2, finetune_bs=128, num_groups=1):
+        X_train, X_eval, y_train, y_eval = train_test_split(data, target, test_size=0.3, random_state=42)
         dataloader = DataLoader(
-            TensorDataset(data, target),
+            TensorDataset(X_train, y_train),
             batch_size=batch_size,
             shuffle=True,
             pin_memory=self.device == "cuda",
         )
-        best_candidates = train_network_controller(self.self_fex_struct, self.inter_fex_struct, dataloader, adjacency, self.controller_config, self.fex_config, num_workers=num_workers, num_groups=num_groups)
+        controller_eval_states, controller_eval_target, finetune_eval_states, finetune_eval_target = train_test_split(X_eval, y_eval, test_size=0.5, random_state=42)
+        controller_eval_loader = DataLoader(
+            TensorDataset(controller_eval_states, controller_eval_target),
+            batch_size=batch_size,
+            shuffle=False,
+            pin_memory=self.device == "cuda",
+        )
+        finetune_eval_loader = DataLoader(
+            TensorDataset(finetune_eval_states, finetune_eval_target),
+            batch_size=batch_size,
+            shuffle=False,
+            pin_memory=self.device == "cuda",
+        )
+        best_candidates = train_network_controller(self.self_fex_struct, self.inter_fex_struct, dataloader, controller_eval_loader, adjacency, self.controller_config, self.fex_config, num_workers=num_workers, num_groups=num_groups)
         self.fex_config.num_epochs = self.finetune_epochs
         self.fex_config.lr = self.finetune_lr
         self.fex_config.inter_lr = self.finetune_lr
         self.fex_config.bfgs_epochs = 0
         if finetune_bs:
             dataloader= DataLoader(
-                TensorDataset(data, target),
+                TensorDataset(X_eval, y_eval),
                 batch_size=finetune_bs,
                 shuffle=True,
                 pin_memory=self.device == "cuda",
@@ -88,7 +103,7 @@ class CoupledFEX():
                 param.requires_grad = True
             # forcing_tree.compile()
             # inter_tree.compile()
-            loss = train_network_fex(forcing_tree, inter_tree, dataloader, adjacency, self.fex_config, verbose=True, log_every=100)
+            loss = train_network_fex(forcing_tree, inter_tree, dataloader, finetune_eval_loader, adjacency, self.fex_config, verbose=True, log_every=100)
             candidate.reward = 1 / (1 + loss)
 
         self.best_model = max(best_candidates, key=lambda c: c.reward)
@@ -113,6 +128,7 @@ class CoupledFEX():
             self.best_model.forcing_tree,
             self.best_model.inter_tree,
             dataloader,
+            None,
             adjacency,
             self.fex_config,
             verbose=True,
