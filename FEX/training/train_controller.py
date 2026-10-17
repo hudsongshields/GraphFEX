@@ -213,6 +213,7 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
     fex_kwargs = {
         "leaf_dim": next(iter(dataloader))[0].shape[-1],
         "tree_structure": self_fex_struct,
+        "expression_threshold": fex_config.expression_threshold
     }
     fex_kwargs["num_leaves"] = self_fex_struct.num_leaves
     best_candidates = Pool(pool_size=controller_config.poolsize)
