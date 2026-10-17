@@ -54,8 +54,8 @@ class CoupledFEX():
 
 
     def init(self, fex_ops, inter_ops, leaf_dim):
-        fex_tree = FEX(leaf_dim=leaf_dim, sample_indices=fex_ops, tree_structure=self.self_fex_struct).to(self.device)
-        inter_tree = FEX(leaf_dim=leaf_dim*2, sample_indices=inter_ops, tree_structure=self.inter_fex_struct).to(self.device)
+        fex_tree = FEX(leaf_dim=leaf_dim, sample_indices=fex_ops, tree_structure=self.self_fex_struct, expression_threshold=self.fex_config.expression_threshold).to(self.device)
+        inter_tree = FEX(leaf_dim=leaf_dim*2, sample_indices=inter_ops, tree_structure=self.inter_fex_struct, expression_threshold=self.fex_config.expression_threshold).to(self.device)
         self.best_model = GraphPoolCandidate(id=0,forcing_tree=fex_tree, inter_tree=inter_tree, reward=100.0)
 
 
