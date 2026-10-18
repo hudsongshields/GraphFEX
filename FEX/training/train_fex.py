@@ -97,21 +97,17 @@ def train_network_fex(
     
     forcing_tree.eval()
     inter_dynam_tree.eval()
-    final_pred_losses = [
-        total_loss(
-            batch_x.to(device),
-            batch_dy_val.to(device),
-            forcing_tree,
-            inter_dynam_tree,
-            nodes,
-            edges,
-            edge_weights,
-        ).item()
-        for batch_x, batch_dy_val[:, :, config.target_dim:config.target_dim+1] in eval_loader
-    ]
+    final_pred_losses = []
+    with torch.no_grad():
+        for batch_x, batch_dy_val in eval_loader:
+            batch_x = batch_x.to(device)
+            batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim+1].to(device)
+            final_pred_losses.append(
+                total_loss(batch_x, batch_dy_val, forcing_tree, inter_dynam_tree, nodes, edges, edge_weights).item()
+            )
 
-    final_loss = sum(final_pred_losses) / len(final_pred_losses) 
-    
+    final_loss = sum(final_pred_losses) / len(final_pred_losses) if final_pred_losses else float('inf')
+
     if log_every > 0:
         print(
             f"loss={final_loss:.8e}"

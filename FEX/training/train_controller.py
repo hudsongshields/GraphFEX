@@ -231,7 +231,7 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
 
     context = mp.get_context("spawn")
     gpu_ids = list(range(num_gpus)) if num_gpus > 0 else [None]
-    with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, None, fex_kwargs, None, dataloader_global, None, fex_config_global, None)) as contextpool:
+    with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, None, fex_kwargs, None, dataloader_global, None, None, fex_config_global, None)) as contextpool:
         for epoch in range(controller_config.num_epochs):
             optimizer.zero_grad()
             num_cands = controller_config.num_cands_per_epoch
