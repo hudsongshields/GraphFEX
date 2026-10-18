@@ -69,7 +69,7 @@ class CoupledFEX():
             shuffle=True,
             pin_memory=self.device == "cuda",
         )
-        controller_eval_states, controller_eval_target, finetune_eval_states, finetune_eval_target = train_test_split(X_eval, y_eval, test_size=0.5, random_state=42)
+        controller_eval_states, finetune_eval_states, controller_eval_target, finetune_eval_target = train_test_split(X_eval, y_eval, test_size=0.5, random_state=42)
         controller_eval_loader = DataLoader(
             TensorDataset(controller_eval_states, controller_eval_target),
             batch_size=batch_size,
@@ -89,7 +89,10 @@ class CoupledFEX():
         self.fex_config.bfgs_epochs = 0
         if finetune_bs:
             dataloader= DataLoader(
-                TensorDataset(X_eval, y_eval),
+                TensorDataset(
+                    torch.cat([X_train, controller_eval_states]),
+                    torch.cat([y_train, controller_eval_target]),
+                ),
                 batch_size=finetune_bs,
                 shuffle=True,
                 pin_memory=self.device == "cuda",
