@@ -1,4 +1,5 @@
 import argparse
+import importlib
 import random
 import re
 import sys
@@ -25,13 +26,14 @@ torch.manual_seed(seed)
 # sigmoid-activation equivalents). "N" indexes the self node's variable (x1..x3); the neighbor's
 # equivalent variable is written as x{N+3}, following FEX's edge-variable convention.
 _COUPLED_PATTERNS = [
-    (re.compile(r"^x(\d)j$"), lambda n: f"x{n + 3}"),
-    (re.compile(r"^x(\d)ix\1j$"), lambda n: f"x{n}*x{n + 3}"),
-    (re.compile(r"^x(\d)jMinusx\1i$"), lambda n: f"x{n + 3} - x{n}"),
-    (re.compile(r"^sigx(\d)jalpha1beta0$"), lambda n: f"exp(x{n + 3})/(1 + exp(x{n + 3}))"),
-    (re.compile(r"^sigx(\d)ix\1jalpha1beta0$"), lambda n: f"x{n}*exp(x{n + 3})/(1 + exp(x{n + 3}))"),
-    (re.compile(r"^sigx(\d)jMinusx\1ialpha1beta0$"), lambda n: f"exp(x{n + 3} - x{n})/(1 + exp(x{n + 3} - x{n}))"),
-    (re.compile(r"^x(\d)isigx\1jalpha1beta0$"), lambda n: f"x{n}*exp(x{n + 3})/(1 + exp(x{n + 3}))"),
+    (re.compile(r"^x(\d)j$"), lambda n, dim: f"x{n + dim}"),
+    (re.compile(r"^x(\d)ix\1j$"), lambda n, dim: f"x{n}*x{n + dim}"),
+    (re.compile(r"^x(\d)jMinusx\1i$"), lambda n, dim: f"x{n + dim} - x{n}"),
+    (re.compile(r"^sigx(\d)jalpha1beta0$"), lambda n, dim: f"exp(x{n + dim})/(1 + exp(x{n + dim}))"),
+    (re.compile(r"^sigx(\d)ix\1jalpha1beta0$"), lambda n, dim: f"x{n}*exp(x{n + dim})/(1 + exp(x{n + dim}))"),
+    (re.compile(r"^sigx(\d)jMinusx\1ialpha1beta0$"), lambda n, dim: f"exp(x{n + dim} - x{n})/(1 + exp(x{n + dim} - x{n}))"),
+    (re.compile(r"^x(\d)isigx\1jalpha1beta0$"), lambda n, dim: f"x{n}*exp(x{n + dim})/(1 + exp(x{n + dim}))"),
+    (re.compile(r"^expx(\d)jMinusx\1i$"), lambda n, dim: f"exp(x{n + dim} - x{n})"),
 ]
 
 
@@ -42,16 +44,16 @@ def self_term_to_sympy(term: str) -> str:
     return "*".join(f"{var}**{count}" if count > 1 else var for var, count in sorted(counts.items()))
 
 
-def term_to_sympy(term: str) -> tuple[bool, str]:
+def term_to_sympy(term: str, dim: int) -> tuple[bool, str]:
     """Translate a library column name into a sympy-parseable expression, tagged coupled vs. self."""
     for pattern, to_expr in _COUPLED_PATTERNS:
         match = pattern.match(term)
         if match:
-            return True, to_expr(int(match.group(1)))
+            return True, to_expr(int(match.group(1)), dim)
     return False, self_term_to_sympy(term)
 
 
-def fit_to_sympy_strs(final_fit: pd.Series) -> tuple[str, str]:
+def fit_to_sympy_strs(final_fit: pd.Series, dim: int) -> tuple[str, str]:
     """Split a recovered coefficient series into (self_expr, inter_expr) sympy-parseable strings."""
     self_parts = []
     inter_parts = []
@@ -59,7 +61,7 @@ def fit_to_sympy_strs(final_fit: pd.Series) -> tuple[str, str]:
         if term == "constant":
             self_parts.append(f"({coef})")
             continue
-        is_coupled, expr = term_to_sympy(term)
+        is_coupled, expr = term_to_sympy(term, dim)
         part = f"({coef})*({expr})"
         (inter_parts if is_coupled else self_parts).append(part)
 
@@ -83,16 +85,29 @@ def lorenz_data(snr):
     timeseries, t_derivs = make_data(num_samples=5000, adjacency=adj_matrix, snr=snr, coupling=0.8, smoothing=False)
     return adj_matrix, timeseries, t_derivs
 
+def sl_data(snr):
+    import importlib
+    gen_data_mod = importlib.import_module("NumericalExperiments.Stuart-Landau.generate_data")
+    make_adjacency = getattr(gen_data_mod, "make_adjacency")
+    make_data = getattr(gen_data_mod, "make_data")
+
+    num_traj = 5
+    timesteps = 1000
+    adj_matrix = make_adjacency(10000, 2, 7)
+    timeseries, t_derivs, _ = make_data(num_trajectories=num_traj, num_timesteps=timesteps, adjacency=adj_matrix, coupling=0.15, snr=snr, smoothing=False)
+    return adj_matrix, timeseries, t_derivs
+
 
 SYSTEMS = {
     "hr": dict(
         data_fn=hr_data,
+        dim=3,
         self_poly_order=3,
         coupled_poly_order=1,
         library_kwargs=dict(
             TrigonometricIndex=False, ExponentialIndex=False, FractionalIndex=False, ActivationIndex=False,
             RescalingIndex=False, CoupledTrigonometricIndex=False, CoupledExponentialIndex=False,
-            CoupledFractionalIndex=False, CoupledRescalingIndex=False,
+            CoupledFractionalIndex=False, CoupledRescalingIndex=False, CoupledActivationIndex=True,
         ),
         lambda_file=f"{TWOPHASEPATH}/thresholds/Lambda_HR.csv",
         output=f"{TWOPHASEPATH}/../HR/recovered_two_phase",
@@ -104,6 +119,7 @@ SYSTEMS = {
     ),
     "lorenz": dict(
         data_fn=lorenz_data,
+        dim=3,
         self_poly_order=2,
         coupled_poly_order=1,
         library_kwargs=dict(
@@ -119,11 +135,28 @@ SYSTEMS = {
             2: ("1.0*x1*x2 - 2.6666666667*x3", "0"),
         },
     ),
+    "sl": dict(
+        data_fn=sl_data,
+        dim=2,
+        self_poly_order=3,
+        coupled_poly_order=1,
+        library_kwargs=dict(
+            TrigonometricIndex=False, ExponentialIndex=False, FractionalIndex=False, ActivationIndex=False,
+            RescalingIndex=False, CoupledTrigonometricIndex=False, CoupledExponentialIndex=True,
+            CoupledFractionalIndex=False, CoupledActivationIndex=False, CoupledRescalingIndex=False,
+        ),
+        lambda_file=f"{TWOPHASEPATH}/thresholds/Lambda_StruBal.csv",
+        output=f"{TWOPHASEPATH}/../Stuart-Landau/recovered_two_phase",
+        ground_truth={
+            0: ("x1 - x2 - x1**3 - x1*x2**2", "0.15*exp(x3 - x1)"),
+            1: ("x1 + x2 - x1**2*x2 - x2**3", "0"),
+        },
+    ),
 }
 
 
 def build_matrix(system, adj_matrix, timeseries, t_derivs):
-    dim = 3
+    dim = system["dim"]
     A = adj_matrix.cpu().numpy()
     n_samples = timeseries.shape[0]
     TimeSeries = timeseries.cpu().numpy().reshape(n_samples, -1)
@@ -156,10 +189,10 @@ def run_system(system_name, snr):
     Lambda = pd.read_csv(system["lambda_file"], header=None)
 
     n_nodes = adj_matrix.shape[0]
-    dim = 3
-    keep = 10
-    sample_times = 30
-    batch_size = 10
+    dim = system["dim"]
+    keep = 20
+    sample_times = 25
+    batch_size = 20
     plot_start = 0.5
     plot_end = 0.7
 
@@ -194,7 +227,7 @@ def run_system(system_name, snr):
     print(f"\n[{system_name}] snr={snr} Dimension {d + 1}")
     print(final_fit)
 
-    pred_self_str, pred_inter_str = fit_to_sympy_strs(final_fit)
+    pred_self_str, pred_inter_str = fit_to_sympy_strs(final_fit, dim)
     true_self_str, true_inter_str = system["ground_truth"][d]
 
     smape_self = sMAPE(true_self_str, pred_self_str)
@@ -215,7 +248,7 @@ def run_system(system_name, snr):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--systems", nargs="+", choices=list(SYSTEMS), default=list(SYSTEMS))
-    parser.add_argument("--snr_levels", type=int, nargs="+", default=[30, 35, 40, 45, 50, 55, 60])
+    parser.add_argument("--snr_levels", type=int, nargs="+", default=[37.5, 45, 52.5, 60, 67.5])
     args = parser.parse_args()
 
     results = {}

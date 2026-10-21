@@ -1,11 +1,20 @@
 import sympy as sp
 
 def coefficient_map(expr: str) -> dict:
-    expr = sp.expand(sp.sympify(expr))
+    expr = sp.expand(sp.sympify(expr), power_exp=False)
     coefficients = {}
 
     for term in sp.Add.make_args(expr):
         coefficient, basis = term.as_coeff_Mul()
+
+        skeleton = {}
+        for factor in basis.atoms(sp.exp):
+            arg_terms = [t.as_coeff_Mul() for t in sp.Add.make_args(sp.expand(factor.args[0]))]
+            skeleton[factor] = sp.exp(sp.Add(*[m for _, m in arg_terms]))
+            for c, m in arg_terms:
+                coefficients[(factor.func, skeleton[factor], m)] = c
+        basis = basis.xreplace(skeleton)
+
         coefficients[basis] = coefficients.get(basis, 0) + coefficient
 
     return coefficients

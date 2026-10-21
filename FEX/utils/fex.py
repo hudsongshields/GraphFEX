@@ -10,7 +10,7 @@ from ..models.learnable_tree import FEX
 import torch
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
-from sklearn import train_test_split
+from sklearn.model_selection import train_test_split
 
 class CoupledFEX():
     def __init__(self, self_fex_struct, inter_fex_struct, target_dim, *, 

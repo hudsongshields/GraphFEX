@@ -108,8 +108,6 @@ def make_timeseries(num_samples: int, adjacency: torch.Tensor, snr: int | None =
     if smoothing:
         observed_states, observed_derivatives = numerical_deriv.smoothed_five_point(observed_states, dt=dt)
     else:
-        observed_derivatives = numerical_deriv.five_point(observed_states, dt=dt)
-        observed_states = observed_states[2:-2]
-
+        observed_states, observed_derivatives = numerical_deriv.five_point(observed_states, dt=dt)
 
     return observed_states.cpu(), observed_derivatives.cpu()

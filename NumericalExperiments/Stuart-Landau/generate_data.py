@@ -153,7 +153,7 @@ def make_data(
         if smoothing: 
             observed_state, observed_derivative = numerical_deriv.smoothed_five_point(observed_states[traj], dt=dt)
         else:
-            observed_state, observed_derivative = numerical_deriv.five_point(observed_states, dt=dt)
+            observed_state, observed_derivative = numerical_deriv.five_point(observed_states[traj], dt=dt)
         derivatives.append(observed_derivative)
         tmp_states.append(observed_state)
 

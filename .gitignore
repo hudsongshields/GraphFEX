@@ -28,6 +28,7 @@ HR/logs*
 
 *.txt
 *.csv
+tests/
 
 Point-Vortex/
 Rossler-Dynamics/
