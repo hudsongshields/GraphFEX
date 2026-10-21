@@ -86,14 +86,31 @@ DATA_FNS = {"hr": hr_data, "lorenz": lorenz_data, "kuramoto": kuramoto_data}
 SPEC_FNS = {"hr": hr_fex_specs, "lorenz": lorenz_fex_specs, "kuramoto": kuramoto_fex_specs}
 
 
-def build_and_fit(kind, model_kwargs, fit_kwargs, timeseries, t_derivs, adj_matrix):
+def build_and_fit(
+    kind,
+    model_kwargs,
+    fit_kwargs,
+    timeseries,
+    t_derivs,
+    adj_matrix,
+    *,
+    grouping="random",
+    num_groups=1,
+):
     model_kwargs = dict(model_kwargs)
     if kind == "coupled":
         model = fex.CoupledFEX(
             model_kwargs.pop("self_fex_struct"), model_kwargs.pop("inter_fex_struct"),
             model_kwargs.pop("target_dim"), **model_kwargs,
         )
-        model.fit(timeseries, t_derivs, adj_matrix, **fit_kwargs)
+        model.fit(
+            timeseries,
+            t_derivs,
+            adj_matrix,
+            grouping=grouping,
+            num_groups=num_groups,
+            **fit_kwargs,
+        )
     else:
         model = fex.SingleFEX(model_kwargs.pop("self_fex_struct"), model_kwargs.pop("target_dim"), **model_kwargs)
         model.fit(timeseries, t_derivs, **fit_kwargs)
@@ -107,7 +124,21 @@ def main():
     parser.add_argument("--snr", type=float, default=None)
     parser.add_argument("--timesteps", type=int, default=5000)
     parser.add_argument("--target_dim", type=int, default=None, help="Only train a single dimension (default: all)")
+    parser.add_argument(
+        "--grouping",
+        choices=["random", "maximin"],
+        default="random",
+        help="Grouping strategy for coupled FEX training",
+    )
+    parser.add_argument(
+        "--num-groups",
+        type=int,
+        default=1,
+        help="Number of groups used during coupled FEX training",
+    )
     args = parser.parse_args()
+    if args.num_groups < 1:
+        parser.error("--num-groups must be at least 1")
 
     seed = 42
     random.seed(seed)
@@ -125,7 +156,16 @@ def main():
     models = {}
     for dim in dims:
         kind, model_kwargs, fit_kwargs = fex_specs[dim]
-        models[dim] = build_and_fit(kind, model_kwargs, fit_kwargs, timeseries, t_derivs, adj_matrix)
+        models[dim] = build_and_fit(
+            kind,
+            model_kwargs,
+            fit_kwargs,
+            timeseries,
+            t_derivs,
+            adj_matrix,
+            grouping=args.grouping,
+            num_groups=args.num_groups,
+        )
         print(f"Dim {dim}: {models[dim]}")
 
 
