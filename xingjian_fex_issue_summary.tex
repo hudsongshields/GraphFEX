@@ -1,0 +1,339 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{hyperref}
+
+\title{GraphFEX Complex-Network FEX Implementation Audit}
+\author{xingjian\_check branch}
+\date{September 10, 2026}
+
+\begin{document}
+\maketitle
+
+\section{Purpose}
+
+This note summarizes the implementation issues found in the GraphFEX
+complex-network FEX path before running the proposed HR tests.  The goal is to
+separate three things:
+\begin{enumerate}
+    \item whether the repository matches the published FEX algorithm,
+    \item whether stratified scoring is implemented as a real controller
+    scoring rule rather than a fixed-design proxy, and
+    \item which issues must still be tested before making a paper claim.
+\end{enumerate}
+
+The audit used the current repository on branch \verb|xingjian_check| and the
+online FEX references:
+\begin{itemize}
+    \item Network FEX: \href{https://arxiv.org/abs/2401.03092}{arXiv:2401.03092}.
+    \item H-FEX: \href{https://arxiv.org/abs/2506.20607}{arXiv:2506.20607}.
+    \item FEX/TFDM stochastic residual framework:
+    \href{https://arxiv.org/abs/2605.10687}{arXiv:2605.10687}.
+\end{itemize}
+
+\section{Reference Objective}
+
+For network dynamics, the target structure is
+\begin{equation}
+    \dot{x}_i(t)
+    =
+    F(x_i(t))
+    +
+    \sum_{j=1}^{N} A_{ij}G(x_i(t),x_j(t)).
+\end{equation}
+For a candidate operator sequence $e$ with trainable parameters $\theta$, the
+full candidate loss is
+\begin{equation}
+    L_{\mathrm{full}}(e,\theta)
+    =
+    \frac{1}{T N}
+    \sum_{t=1}^{T}\sum_{i=1}^{N}
+    \left[
+    \widehat{\dot{x}}_i(t)
+    -
+    F_{\theta}(x_i(t))
+    -
+    \sum_{j:(i,j)\in E} A_{ij}
+    G_{\theta}(x_i(t),x_j(t))
+    \right]^2.
+\end{equation}
+The controller score should be a monotone transformation of the optimized loss,
+\begin{equation}
+    S(e)=\frac{1}{1+L(e,\widehat{\theta}_e)}.
+\end{equation}
+The controller is then updated from the top quantile of sampled operator
+sequences, and the stored candidates are fine-tuned after controller search.
+
+\section{Scoring Variants}
+
+\subsection{Random Batch Method}
+
+For a random partition of nodes into batches, RBM keeps only edges whose two
+endpoints fall in the same batch:
+\begin{equation}
+    (i,j)\in E_{\mathrm{RBM}}
+    \quad \Longleftrightarrow \quad
+    b(i)=b(j).
+\end{equation}
+If all batches have size $p$, a fixed edge is retained with probability
+\begin{equation}
+    q=\frac{p-1}{N-1}.
+\end{equation}
+Raw RBM is therefore a biased interaction estimator:
+\begin{equation}
+    \mathbb{E}\left[\widetilde{H}_i(t)\right]
+    =
+    q H_i(t),
+    \qquad
+    H_i(t)=\sum_j A_{ij}G(x_i(t),x_j(t)).
+\end{equation}
+The optional inverse-probability correction is
+\begin{equation}
+    A_{ij}\mapsto \frac{A_{ij}}{q}.
+\end{equation}
+For unequal batches of size $s_b$, the correct retained-edge probability is
+\begin{equation}
+    q_b=\frac{s_b-1}{N-1}.
+\end{equation}
+
+\subsection{Stratified Scoring}
+
+For a selected node stratum $S$, the stratified controller loss is
+\begin{equation}
+    L_S(e,\theta)
+    =
+    \frac{1}{T|S|}
+    \sum_{t=1}^{T}\sum_{i\in S}
+    \left[
+    \widehat{\dot{x}}_i(t)
+    -
+    F_{\theta}(x_i(t))
+    -
+    \sum_{j:(i,j)\in E} A_{ij}
+    G_{\theta}(x_i(t),x_j(t))
+    \right]^2.
+\end{equation}
+For the proposed HR experiments, $S$ is a degree stratum.  The intended compute
+is controlled by the number of incoming edges to the stratum,
+\begin{equation}
+    M = |E_S| = |\{(i,j)\in E:i\in S\}|.
+\end{equation}
+Thus the scoring cost is $O(TMd)$ instead of $O(T|E|d)$.
+
+\section{Implementation Issues Found and Corrected}
+
+\begin{longtable}{p{0.04\linewidth} p{0.31\linewidth} p{0.34\linewidth} p{0.22\linewidth}}
+\toprule
+\# & Issue & Mathematical or experimental consequence & Correction \\
+\midrule
+\endfirsthead
+\toprule
+\# & Issue & Mathematical or experimental consequence & Correction \\
+\midrule
+\endhead
+1 &
+Candidate pool discarded optimized candidate parameters.  The worker trained
+$(e,\theta)$, but the controller rebuilt fresh trees from $e$ before inserting
+them into the pool. &
+The score $S(e)$ was computed using one parameter state, while the stored
+candidate used another.  Final fine-tuning started from random parameters
+instead of the score-stage optimizer output. &
+\verb|eval_candidate| now returns trained forcing and interaction FEX objects;
+the pool stores those trained trees. \\
+\addlinespace
+2 &
+Controller reward used $1/\sqrt{1+L}$ instead of $1/(1+L)$. &
+This changes the reward curvature and therefore the policy-gradient advantage
+used by the quantile controller. &
+Reward changed to $S(e)=1/(1+L(e,\widehat{\theta}_e))$. \\
+\addlinespace
+3 &
+No real stratified-controller scoring path existed. &
+Previous stratified checks were fixed-design candidate scoring, not FEX
+structure discovery.  They could not establish that the controller finds the
+right operator sequence. &
+Added \verb|score_nodes| through loss, FEX training, controller training, and
+\verb|CoupledFEX.fit|. \\
+\addlinespace
+4 &
+Stratified loss computed full-node tensors before slicing. &
+Even when scoring only $S$, the code still evaluated self dynamics and
+allocated interaction tensors over all $N$ nodes.  This undermined the claimed
+$O(M)$ scoring cost. &
+\verb|total_loss| now computes self dynamics only for selected nodes and
+scatter-adds interactions into a tensor of size $|S|$. \\
+\addlinespace
+5 &
+RBM required $N \bmod \texttt{num\_groups}=0$. &
+This breaks ordinary settings such as $N=5000$ with batch size $p=32$, and it
+is not required mathematically. &
+RBM grouping now supports unequal group sizes. \\
+\addlinespace
+6 &
+RBM inverse-probability weighting was initially treated like the default
+baseline. &
+The published RBM-CO baseline is raw RBM scoring followed by full-graph
+fine-tuning.  IPW is a useful mechanism variant, but not the published method. &
+Raw RBM is the default.  IPW is optional via \verb|rbm_reweight|. \\
+\addlinespace
+7 &
+IPW needed exact probabilities for unequal batches. &
+For unequal batches, using a single global $q$ is wrong.  The unbiased
+correction depends on the retained batch size $s_b$. &
+Optional IPW now uses $q_b=(s_b-1)/(N-1)$ per retained edge. \\
+\addlinespace
+8 &
+Adam stored the best loss but left the model at the final epoch weights. &
+The controller could reward a candidate for an earlier good epoch while
+storing later worse parameters. &
+Both network FEX and single FEX now clone and restore the best parameter state
+before returning. \\
+\addlinespace
+9 &
+LBFGS closure backpropagated the summed loss but returned the mean loss. &
+Gradient scale did not match the reported objective, making Adam/BFGS scores
+less comparable across batch counts. &
+LBFGS closure now differentiates and returns the same mean loss. \\
+\addlinespace
+10 &
+Network-FEX LBFGS did not use strong Wolfe line search, while single-FEX did. &
+The two optimizer paths had different stability behavior. &
+Network-FEX LBFGS now uses \verb|line_search_fn="strong_wolfe"|. \\
+\addlinespace
+11 &
+Controller top-quantile pool could have size zero. &
+If $\lfloor \rho K\rfloor=0$, the policy-gradient update has no candidates. &
+The quantile pool size is now $\max(1,\lfloor \rho K\rfloor)$. \\
+\addlinespace
+12 &
+GraphPool uniqueness check used the wrong node field. &
+It checked \verb|node.op|, but nodes store operations as
+\verb|node.operation.op|.  Uniqueness checking would fail when enabled. &
+Fixed operation-name comparison in \verb|GraphPool.check_node_equality|. \\
+\addlinespace
+13 &
+GraphPool checkpoint loading passed the wrong tree object. &
+It passed \verb|tree_config.tree_func| into \verb|FEX|, but \verb|FEX| expects
+the full \verb|TreeConfig|.  It also looked for sample indices in the wrong
+dictionary level. &
+Checkpoint loading now passes the full \verb|TreeConfig| and reads
+\verb|_meta_sample_indices| from the saved state. \\
+\addlinespace
+14 &
+\verb|CoupledFEX.to| used a nonexistent field. &
+It referenced \verb|inter_fex|, but the candidate object stores
+\verb|inter_tree|. &
+Changed to \verb|inter_tree|. \\
+\addlinespace
+15 &
+\verb|FEX.helpers| eagerly imported numerical-derivative code. &
+The environment lacks \verb|pysindy|, so unrelated FEX imports could fail
+because \verb|numerical_deriv| imported the smoothing dependency. &
+\verb|numerical_deriv| is now lazy-loaded from \verb|FEX.helpers|. \\
+\bottomrule
+\end{longtable}
+
+\section{Files Changed}
+
+\begin{itemize}
+    \item \verb|FEX/helpers/__init__.py|
+    \item \verb|FEX/helpers/pools.py|
+    \item \verb|FEX/training/loss_funcs.py|
+    \item \verb|FEX/training/train_controller.py|
+    \item \verb|FEX/training/train_fex.py|
+    \item \verb|FEX/utils/fex.py|
+    \item \verb|NumericalExperiments/HR/scripts/xingjian_test_experument.py|
+\end{itemize}
+
+\section{Verification Already Performed}
+
+The following checks have passed:
+\begin{itemize}
+    \item Python compilation for all touched modules.
+    \item A small candidate-evaluator smoke test returning trained FEX objects.
+    \item A stratified-loss smoke test using \verb|score_nodes|.
+    \item A non-divisible RBM grouping smoke test.
+    \item \verb|git diff --check|.
+\end{itemize}
+
+These are smoke tests only.  They show that the corrected paths run, but they
+do not yet establish recovery quality at the target network sizes.
+
+\section{Remaining Gate Experiments}
+
+\subsection{Controller Gate}
+
+The first decisive experiment is a full controller run for HR at $N=5000$,
+SNR 40:
+\begin{equation}
+    \text{stratified controller scoring}
+    \quad\text{vs.}\quad
+    \text{RBM-CO scoring}.
+\end{equation}
+The output should be reported in a Table-2 style format: each recovered
+self-dynamics term $F$, each recovered interaction term $G$, its coefficient,
+and final symbolic sMAPE.  This is the gate from fixed-design scoring to real
+structure discovery.
+
+\subsection{$k^\star$ U-Curve}
+
+For degree stratum $k$, the predicted normalized risk is
+\begin{equation}
+    R(k)
+    =
+    \frac{g_0^2}{v}k
+    +
+    \frac{\sigma_\varepsilon^2}{v}\frac{1}{k}.
+\end{equation}
+The predicted optimum is
+\begin{equation}
+    k^\star
+    =
+    \frac{\sigma_\varepsilon}{|g_0|}.
+\end{equation}
+The important rule is to estimate and record
+$\sigma_\varepsilon$, $g_0$, $v$, and $k^\star$ before sweeping degree strata.
+If SNR decreases from $\infty$ to 45 to 40, then
+$\sigma_\varepsilon$ should increase and $k^\star$ should move right.
+
+\subsection{Assumption Checks}
+
+Two checks bound the theorem:
+\begin{enumerate}
+    \item neighbor-state correlation on the attractor, which tests the
+    conditionally i.i.d. neighbor-state assumption;
+    \item low-degree state distribution versus global state distribution, which
+    tests degree-state confounding in scale-free graphs.
+\end{enumerate}
+
+\subsection{Cost Panel}
+
+The corrected cost panel should plot raw pair evaluations:
+\begin{equation}
+    C_{\mathrm{full}}\approx \bar{k}N,\qquad
+    C_{\mathrm{RBM-CO}}\approx L N p,\qquad
+    C_{\mathrm{strat}}\approx M.
+\end{equation}
+Here $L$ is the number of RBM stochastic partitions or controller score
+realizations, $p$ is batch size, and $M$ is the fixed stratified edge budget.
+This version makes RBM-CO climb above full sparse evaluation when $Lp>\bar{k}$.
+
+\subsection{Moment-Matched Decoy}
+
+The optional high-value test compares the true sigmoid coupling against a
+variance-matched linear decoy.  The aggregation-collapse claim predicts that
+hub scoring cannot separate these candidates, while leaf/low-degree scoring can.
+
+\section{Current Status}
+
+The implementation path is now suitable for launching the five tests, but the
+paper claim is not yet established.  In particular, the full HR controller gate
+at $N=5000$, SNR 40 has not yet been run.  The current result is therefore an
+implementation correction and experimental harness preparation, not a final
+scientific conclusion.
+
+\end{document}

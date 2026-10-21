@@ -51,6 +51,7 @@ class CoupledFEX():
         if self.best_model is not None:
             self.best_model.forcing_tree.to(device)
             self.best_model.inter_tree.to(device)
+            self.best_model.inter_tree.to(device)
         return self
 
 
@@ -61,7 +62,19 @@ class CoupledFEX():
 
 
 
-    def fit(self, data, target, adjacency, batch_size=64, num_workers=2, finetune_bs=128, num_groups=1):
+    def fit(
+        self,
+        data,
+        target,
+        adjacency,
+        batch_size=64,
+        num_workers=2,
+        finetune_bs=128,
+        num_groups=1,
+        rbm_reweight=False,
+        grouping="random",
+        score_nodes=None,
+    ):
         X_train, X_eval, y_train, y_eval = train_test_split(data, target, test_size=0.3, random_state=42)
         dataloader = DataLoader(
             TensorDataset(X_train, y_train),
@@ -82,7 +95,19 @@ class CoupledFEX():
             shuffle=False,
             pin_memory=self.device == "cuda",
         )
-        best_candidates = train_network_controller(self.self_fex_struct, self.inter_fex_struct, dataloader, controller_eval_loader, adjacency, self.controller_config, self.fex_config, num_workers=num_workers, num_groups=num_groups)
+        best_candidates = train_network_controller(
+            self.self_fex_struct,
+            self.inter_fex_struct,
+            dataloader, controller_eval_loader,
+            adjacency,
+            self.controller_config,
+            self.fex_config,
+            num_workers=num_workers,
+            num_groups=num_groups,
+            rbm_reweight=rbm_reweight,
+            grouping=grouping,
+            score_nodes=score_nodes,
+        )
         self.fex_config.num_epochs = self.finetune_epochs
         self.fex_config.lr = self.finetune_lr
         self.fex_config.inter_lr = self.finetune_lr

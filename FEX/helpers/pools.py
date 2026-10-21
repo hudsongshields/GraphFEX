@@ -63,7 +63,9 @@ class GraphPool:
         if node1.operation_type == "leaf" and node2.operation_type == "leaf":
             return True
 
-        if node1.op.__name__ != node2.op.__name__:
+        op1 = getattr(node1.operation, "op", node1.operation)
+        op2 = getattr(node2.operation, "op", node2.operation)
+        if getattr(op1, "__name__", str(op1)) != getattr(op2, "__name__", str(op2)):
             return False
 
         if (node1.left is None) != (node2.left is None):

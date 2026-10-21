@@ -29,6 +29,9 @@ dataloader_global = None
 adj_matrix_global = None
 fex_config_global = None
 num_groups_global = 1
+rbm_reweight_global = False
+grouping_global = "random"
+score_nodes_global = None
 
 
 def eval_candidate(k_cand, gpu_id, op_indices):
@@ -59,6 +62,9 @@ def eval_candidate(k_cand, gpu_id, op_indices):
             adj_matrix_global,
             num_groups=num_groups_global,
             config=fex_config_global,
+            rbm_reweight=rbm_reweight_global,
+            grouping=grouping_global,
+            score_nodes=score_nodes_global,
             device=device,
         )
     else:
@@ -74,22 +80,33 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     else:
         reward = 1.0 / (1.0 + score)
 
-    for param in forcing_fex.parameters():
-        param.requires_grad = False
-        param.data = param.data.cpu()
+    for param in forcing_fex.all_parameters():
+        param.grad = None
     if inter_fex is not None:
-        for param in inter_fex.parameters():
-            param.requires_grad = False
-            param.data = param.data.cpu()
-        inter_fex = inter_fex.cpu()
+        for param in inter_fex.all_parameters():
+            param.grad = None
+        inter_fex = inter_fex.to("cpu")
 
     forcing_fex = forcing_fex.cpu()
     return op_indices, reward, k_cand, forcing_fex, inter_fex
 
 
-def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwargs_input, dataloader, eval_loader, adj_matrix, fex_config, logger_path=None, num_groups=1):
+def init_shared_resources(
+    self_ops,
+    inter_ops,
+    fex_kwargs_input,
+    inter_fex_kwargs_input,
+    dataloader, eval_loader,
+    adj_matrix,
+    fex_config,
+    logger_path=None,
+    num_groups=1,
+    rbm_reweight=False,
+    grouping="random",
+    score_nodes=None,
+):
     global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs
-    global dataloader_global, eval_loader_global, adj_matrix_global, fex_config_global, num_groups_global
+    global dataloader_global, eval_loader_global, adj_matrix_global, fex_config_global, num_groups_global, rbm_reweight_global, grouping_global, score_nodes_global
 
     self_ops_per_node = self_ops
     inter_ops_per_node = inter_ops
@@ -101,18 +118,38 @@ def init_shared_resources(self_ops, inter_ops, fex_kwargs_input, inter_fex_kwarg
     adj_matrix_global = adj_matrix
     fex_config_global = fex_config
     num_groups_global = num_groups
+    rbm_reweight_global = rbm_reweight
+    grouping_global = grouping
+    score_nodes_global = score_nodes
 
 
 
-def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: TreeConfig, dataloader, eval_loader, adj_matrix, config: ControllerConfig, fex_config: FEXConfig, *, num_groups=1, checkpoint_dir: Path = None, num_workers: int = 2) -> GraphPool:
+def train_network_controller(
+    self_fex_struct: TreeConfig,
+    inter_fex_struct: TreeConfig,
+    dataloader, eval_loader,
+    adj_matrix,
+    config: ControllerConfig,
+    fex_config: FEXConfig,
+    *,
+    num_groups=1,
+    rbm_reweight: bool = False,
+    grouping: str = "random",
+    score_nodes=None,
+    checkpoint_dir: Path = None,
+    num_workers: int = 2,
+) -> GraphPool:
     num_gpus = torch.cuda.device_count()
     
-    global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, num_groups_global, eval_loader_global
+    global self_ops_per_node, inter_ops_per_node, inter_fex_kwargs, fex_kwargs, dataloader_global, adj_matrix_global, fex_config_global, num_groups_global, eval_loader_global, rbm_reweight_global, grouping_global, score_nodes_global
     dataloader_global = dataloader
     eval_loader_global = eval_loader
     adj_matrix_global = adj_matrix
     fex_config_global = fex_config
     num_groups_global = num_groups
+    rbm_reweight_global = rbm_reweight
+    grouping_global = grouping
+    score_nodes_global = score_nodes
 
     self_ops_per_node = self_fex_struct.ops_per_node
     inter_ops_per_node = inter_fex_struct.ops_per_node
@@ -151,12 +188,29 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
 
     context = mp.get_context("spawn")
     gpu_ids = list(range(num_gpus)) if num_gpus > 0 else [None]
-    with context.Pool(processes=num_threads, initializer=init_shared_resources, initargs=(self_ops_per_node, inter_ops_per_node, fex_kwargs, inter_fex_kwargs, dataloader_global, eval_loader_global, adj_matrix_global, fex_config_global, None, num_groups_global)) as contextpool:
+    with context.Pool(
+        processes=num_threads,
+        initializer=init_shared_resources,
+        initargs=(
+            self_ops_per_node,
+            inter_ops_per_node,
+            fex_kwargs,
+            inter_fex_kwargs,
+            dataloader_global, eval_loader_global,
+            adj_matrix_global,
+            fex_config_global,
+            None,
+            num_groups_global,
+            rbm_reweight_global,
+            grouping_global,
+            score_nodes_global,
+        ),
+    ) as contextpool:
         for epoch in range(config.num_epochs):
             optimizer.zero_grad()
             num_cands = config.num_cands_per_epoch
             threshold = config.percentile_threshold
-            thresh_idx = int(threshold * num_cands)
+            thresh_idx = max(1, int(threshold * num_cands))
             log_probs = []
             pmfs = controller(controller_input)
             op_indices_list = []
@@ -171,8 +225,8 @@ def train_network_controller(self_fex_struct: TreeConfig, inter_fex_struct: Tree
             results = contextpool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
             t2 = time.time()
             print(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
-            for op_indices, reward, k_cand, forcing_fex, inter_fex in results:
-                candidate = GraphPoolCandidate(inter_tree=inter_fex, forcing_tree=forcing_fex, reward=reward, id=int(k_cand + epoch * config.num_cands_per_epoch))
+            for op_indices, reward, k_cand, forcing_tree, inter_tree in results:
+                candidate = GraphPoolCandidate(inter_tree=inter_tree, forcing_tree=forcing_tree, reward=reward, id=int(k_cand + epoch * config.num_cands_per_epoch))
                 top_epoch_cands.add_new(candidate)
 
             print(f"Epoch {epoch} pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
@@ -236,7 +290,7 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
             optimizer.zero_grad()
             num_cands = controller_config.num_cands_per_epoch
             threshold = controller_config.percentile_threshold
-            thresh_idx = int(threshold * num_cands)
+            thresh_idx = max(1, int(threshold * num_cands))
             log_probs = []
             pmfs = controller(controller_input)
             op_indices_list = []
@@ -251,8 +305,8 @@ def train_controller(self_fex_struct: TreeConfig, dataloader, controller_config:
             results = contextpool.starmap(eval_candidate, [(k_cand, gpu_ids[k_cand % len(gpu_ids)], op_indices_list[k_cand]) for k_cand in range(num_cands)])
             t2 = time.time()
             print(f"Evaluation time for fex epoch: {((t2 - t1) / num_cands / fex_config.num_epochs):.2f} seconds")
-            for op_indices, reward, k_cand, forcing_fex, _ in results:
-                candidate = PoolCandidate(tree=forcing_fex, reward=reward, id=int(k_cand + epoch * controller_config.num_cands_per_epoch))
+            for op_indices, reward, k_cand, forcing_tree, _ in results:
+                candidate = PoolCandidate(tree=forcing_tree, reward=reward, id=int(k_cand + epoch * controller_config.num_cands_per_epoch))
                 top_epoch_cands.add_new(candidate)
 
             print(f"Epoch {epoch}, pmfs: {[pmf.detach().cpu().numpy() for pmf in pmfs]}")
