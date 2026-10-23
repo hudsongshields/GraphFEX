@@ -66,6 +66,7 @@ def eval_candidate(k_cand, gpu_id, op_indices):
             grouping=grouping_global,
             score_nodes=score_nodes_global,
             device=device,
+            log_every=10
         )
     else:
         score = train_fex(
@@ -80,10 +81,10 @@ def eval_candidate(k_cand, gpu_id, op_indices):
     else:
         reward = 1.0 / (1.0 + score)
 
-    for param in forcing_fex.all_parameters():
+    for param in forcing_fex.parameters():
         param.grad = None
     if inter_fex is not None:
-        for param in inter_fex.all_parameters():
+        for param in inter_fex.parameters():
             param.grad = None
         inter_fex = inter_fex.to("cpu")
 

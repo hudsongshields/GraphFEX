@@ -72,8 +72,6 @@ def train_network_fex(
         edge_weights = edge_weights[edge_keep]
 
     best_epoch_loss = float('inf')
-    best_forcing_state = None
-    best_inter_state = None
 
     inter_dynam_tree.train()
     forcing_tree.train()
@@ -147,6 +145,78 @@ def train_network_fex(
                 f"pred_loss={mean_epoch_pred_loss:.8e}, "
             )
     
+    if config.bfgs_epochs > 0:
+        bfgs_parameters = list(forcing_tree.parameters()) + list(inter_dynam_tree.parameters())
+        bfgs_optim = torch.optim.LBFGS(
+            bfgs_parameters,
+            lr=config.bfgs_lr,
+            max_iter=config.bfgs_epochs,
+            line_search_fn="strong_wolfe",
+        )
+
+        bfgs_batches = []
+        for batch_x, batch_dy_val in dataloader:
+            batch_x = batch_x.to(device)
+            batch_dy_val = batch_dy_val[
+                :, :, config.target_dim:config.target_dim + 1
+            ].to(device)
+            bfgs_batches.append((batch_x, batch_dy_val))
+
+        def closure():
+            bfgs_optim.zero_grad()
+            accumulated_loss = None
+            valid_batches = 0
+            for batch_x, batch_dy_val in bfgs_batches:
+                batch_loss = total_loss(
+                    batch_x,
+                    batch_dy_val,
+                    forcing_tree,
+                    inter_dynam_tree,
+                    nodes,
+                    edges,
+                    edge_weights,
+                    score_nodes=score_nodes_tensor,
+                )
+                if not torch.isfinite(batch_loss):
+                    continue
+                accumulated_loss = (
+                    batch_loss if accumulated_loss is None
+                    else accumulated_loss + batch_loss
+                )
+                valid_batches += 1
+
+            if valid_batches == 0 or accumulated_loss is None:
+                return torch.tensor(float("inf"), device=device)
+
+            mean_loss = accumulated_loss / valid_batches
+            mean_loss.backward()
+            return mean_loss
+
+        bfgs_optim.step(closure)
+
+        # Evaluate BFGS loss after optimization
+        with torch.no_grad():
+            bfgs_loss = 0.0
+            valid_batches = 0
+            for batch_x, batch_dy_val in bfgs_batches:
+                batch_loss = total_loss(
+                    batch_x,
+                    batch_dy_val,
+                    forcing_tree,
+                    inter_dynam_tree,
+                    nodes,
+                    edges,
+                    edge_weights,
+                    score_nodes=score_nodes_tensor,
+                )
+                if not torch.isfinite(batch_loss):
+                    continue
+                bfgs_loss += batch_loss.item()
+                valid_batches += 1
+            bfgs_loss = bfgs_loss / valid_batches if valid_batches > 0 else float('inf')
+        if log_every > 0:
+            print(f"BFGS loss: {bfgs_loss:.8e}")
+
     forcing_tree.eval()
     inter_dynam_tree.eval()
     final_pred_losses = []

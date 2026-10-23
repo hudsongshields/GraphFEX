@@ -7,6 +7,7 @@ import torch
 
 from FEX.utils import fex
 from FEX.helpers.plots import plot_dynamics
+from FEX.helpers import operations as ops
 
 
 def hr_data(args):
@@ -17,23 +18,31 @@ def hr_data(args):
     return adj_matrix, timeseries, t_derivs
 
 
-def hr_fex_specs(device):
+def hr_fex_specs(device, args):
+    ops.UNARY_OPS[:] = [
+        ops.identity,
+        ops.square,
+        ops.cube,
+        ops.fourth_power,
+        ops.safe_exp,
+        ops.sigmoid,
+    ]
     return {
         0: ("coupled", dict(
             self_fex_struct="depth_3_leaves_4_config", inter_fex_struct="depth_2_tree_config", target_dim=0,
-            controller_epochs=400, controller_lr=0.003, finetune_epochs=20000, finetune_lr=1e-4,
-            num_fex_epochs=120, self_lr=0.02, inter_lr=0.02, bfgs_epochs=0, bfgs_lr=0.65, poolsize=10,
+            controller_epochs=400, controller_lr=0.01, finetune_epochs=20000, finetune_lr=1e-4,
+            num_fex_epochs=60, self_lr=0.04, inter_lr=0.04, bfgs_epochs=20, bfgs_lr=0.8, poolsize=10,
             device=device, expression_threshold=0.1,
-        ), dict(num_workers=5, finetune_bs=64)),
+        ), dict(num_workers=args.num_workers, finetune_bs=64)),
         1: ("single", dict(
             self_fex_struct="depth_2_tree_config", target_dim=1, num_finetune_epochs=5000,
             controller_epochs=200, num_fex_epochs=60, device=device, expression_threshold=0.01,
-        ), dict(num_workers=5)),
+        ), dict(num_workers=args.num_workers)),
         2: ("single", dict(
             self_fex_struct="depth_2_tree_config", target_dim=2, controller_lr=0.01, controller_epochs=250,
             num_finetune_epochs=10000, finetune_lr=0.002, self_lr=0.04, num_fex_epochs=80, device=device,
             expression_threshold=0.001,
-        ), dict(num_workers=5)),
+        ), dict(num_workers=args.num_workers)),
     }
 
 
@@ -45,7 +54,7 @@ def lorenz_data(args):
     return adj_matrix, timeseries, t_derivs
 
 
-def lorenz_fex_specs(device):
+def lorenz_fex_specs(device, args):
     return {
         0: ("coupled", dict(
             self_fex_struct="depth_2_tree_config", inter_fex_struct="depth_2_tree_config", target_dim=0,
@@ -72,13 +81,13 @@ def kuramoto_data(args):
     return adj_matrix, timeseries, t_derivs
 
 
-def kuramoto_fex_specs(device):
+def kuramoto_fex_specs(device, args):
     return {
         0: ("coupled", dict(
             self_fex_struct="depth_2_tree_config", inter_fex_struct="depth_2_tree_config", target_dim=0,
             controller_epochs=100, inter_lr=0.02, self_lr=0.02, num_fex_epochs=80, finetune_epochs=5000,
             finetune_lr=1e-4, poolsize=8, device=device, expression_threshold=0.01,
-        ), dict(num_workers=5)),
+        ), dict(num_workers=args.num_workers)),
     }
 
 
@@ -124,6 +133,7 @@ def main():
     parser.add_argument("--snr", type=float, default=None)
     parser.add_argument("--timesteps", type=int, default=5000)
     parser.add_argument("--target_dim", type=int, default=None, help="Only train a single dimension (default: all)")
+    parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument(
         "--grouping",
         choices=["random", "maximin"],
@@ -149,7 +159,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     adj_matrix, timeseries, t_derivs = DATA_FNS[args.experiment](args)
-    fex_specs = SPEC_FNS[args.experiment](device)
+    fex_specs = SPEC_FNS[args.experiment](device, args)
 
     dims = [args.target_dim] if args.target_dim is not None else sorted(fex_specs)
 
