@@ -146,7 +146,12 @@ def main():
         default=1,
         help="Number of groups used during coupled FEX training",
     )
+    parser.add_argument("--checkpoint", type=bool, default=True)
+
     args = parser.parse_args()
+    checkpoint = None
+    if args.checkpoint:
+        checkpoint = f'{args.experiment}_snr{args.snr}_dim{args.target_dim}'
     if args.num_groups < 1:
         parser.error("--num-groups must be at least 1")
 
@@ -176,7 +181,11 @@ def main():
             grouping=args.grouping,
             num_groups=args.num_groups,
         )
-        print(f"Dim {dim}: {models[dim]}")
+        print_output = f"Dim {dim}: {models[dim]}"
+        print(print_output)
+        if args.checkpoint:
+            with open(checkpoint, mode='a', encoding='utf-8') as f:
+                f.write(print_output + '\n')
 
 
 
