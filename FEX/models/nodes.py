@@ -4,18 +4,18 @@ import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import Callable, Optional
 import copy
+from torch.utils._pytree import register_pytree_node
 
 
 
 class UnaryOperation(nn.Module):
     def __init__(self, op: Callable):
         super().__init__()
-        self.scale = 1.5
+        self.scale = 1.0
 
         self.a = nn.Parameter(torch.randn((1)) * self.scale)
         self.b = nn.Parameter(torch.randn((1)) * self.scale)
         self.op = op
-
 
     def forward(self, x: torch.Tensor):
         return self.a * self.op(x) + self.b
@@ -33,23 +33,13 @@ class BinaryOperation(nn.Module):
 @dataclass
 class Node:
     operation_type: str
-    operation: Callable
+    operation_idx: Optional[int] = None
     leaf_idx: Optional[int] = None
     left: Optional["Node"] = None
     right: Optional["Node"] = None
-
     name: Optional[str] = None
+    operation: Optional[nn.Module] = None
 
-    def __post_init__(self):
-        if self.left is None and self.right is None:
-            self.operation_type = "leaf"
-
-        if self.operation_type == "unary":
-            if not isinstance(self.operation, UnaryOperation):
-                self.operation = UnaryOperation(self.operation)
-        elif self.operation_type == "binary":
-            if not isinstance(self.operation, BinaryOperation):
-                self.operation = BinaryOperation(self.operation)
 
     def preorder_traversal(self):
         nodes = [self]
@@ -58,6 +48,7 @@ class Node:
         if self.right:
             nodes += self.right.preorder_traversal()
         return nodes
+
     
     def get_parameters(self):
         params = []
@@ -125,15 +116,24 @@ class Node:
         return node
 
         
-    def __str__(self, leaf_expressions=None):
-        if self.operation_type == "leaf":
-            if leaf_expressions is not None:
-                return f"({leaf_expressions[self.leaf_idx]})"
-            else:
-                return f"x{self.leaf_idx}"
-        elif self.operation_type == "unary":
-            a, b = self.operation.a.detach().item(), self.operation.b.detach().item()
-            return f"({a:.3f} * {self.operation.op.__name__}({self.left.__str__(leaf_expressions)}) + {b:.3f})"
-        elif self.operation_type == "binary":
-            return f"({self.left.__str__(leaf_expressions)} {self.operation.op.__name__} {self.right.__str__(leaf_expressions)})"
-        
+def node_flatten(node):
+    children = []
+    if node.left is not None: children.append(node.left)
+    if node.right is not None: children.append(node.right)
+    
+    metadata = (node.operation_type, node.operation_idx, node.leaf_idx, 
+                node.left is not None, node.right is not None, node.name)
+    return children, metadata
+
+def node_unflatten(children, metadata):
+    operation_type, operation_idx, leaf_idx, has_left, has_right, name = metadata
+    child_iter = iter(children)
+    left = next(child_iter) if has_left else None
+    right = next(child_iter) if has_right else None
+    
+    return Node(
+        operation_type=operation_type, operation_idx=operation_idx, leaf_idx=leaf_idx,
+        left=left, right=right, name=name, operation=None
+    )
+
+register_pytree_node(Node, node_flatten, node_unflatten)

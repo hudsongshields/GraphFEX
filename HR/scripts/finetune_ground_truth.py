@@ -15,13 +15,30 @@ if str(REPO_ROOT) not in sys.path:
 
 from FEX.models.learnable_tree import FEX
 from FEX.training.loss_funcs import total_loss
-from FEX.training.train_configs import FEXConfig, runtimeconfig
+from FEX.training.train_configs import FEXConfig
 from FEX.training.train_fex import train_network_fex
-from FEX.utils.tree_configs import get_tree_config
+from FEX.helpers.tree_configs import get_tree_config
+from FEX.helpers.operations import BINARY_OPS, UNARY_OPS
 
 
-SELF_SEQUENCE = [0, 0, 0, 0, 1, 2, 0]
-INTERACTION_SEQUENCE = [1, 0, 3]
+def operation_index(operations, name: str) -> int:
+    return next(index for index, operation in enumerate(operations) if operation.__name__ == name)
+
+
+SELF_SEQUENCE = [
+    operation_index(BINARY_OPS, "add"),
+    operation_index(BINARY_OPS, "add"),
+    operation_index(BINARY_OPS, "add"),
+    operation_index(UNARY_OPS, "identity"),
+    operation_index(UNARY_OPS, "square"),
+    operation_index(UNARY_OPS, "cube"),
+    operation_index(UNARY_OPS, "identity"),
+]
+INTERACTION_SEQUENCE = [
+    operation_index(BINARY_OPS, "mul"),
+    operation_index(UNARY_OPS, "identity"),
+    operation_index(UNARY_OPS, "sigmoid"),
+]
 VARIABLES = ["x_i", "y_i", "z_i", "x_j", "y_j", "z_j"]
 
 
@@ -201,8 +218,7 @@ def evaluate_mse(forcing_tree, interaction_tree, dataloader, adjacency, device) 
     non_self = nodes != edges
     nodes = nodes[non_self].to(device)
     edges = edges[non_self].to(device)
-    groups = torch.arange(adjacency.size(0), device=device)
-    scatter_idx = (nodes.unsqueeze(1) == groups.unsqueeze(0)).int().argmax(dim=1)
+    edge_weights = adjacency[nodes, edges]
 
     losses = []
     with torch.no_grad():
@@ -215,7 +231,7 @@ def evaluate_mse(forcing_tree, interaction_tree, dataloader, adjacency, device) 
                     interaction_tree,
                     nodes,
                     edges,
-                    scatter_idx,
+                    edge_weights,
                 ).item()
             )
     return sum(losses) / max(len(losses), 1)
@@ -237,7 +253,7 @@ def main() -> int:
     args = parser.parse_args()
 
     seed_everything(args.seed)
-    device = torch.device(runtimeconfig.device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     adjacency = make_adjacency(args.nodes, probability=0.35, device=device)
     states, derivatives = make_data(args.samples, adjacency)
     dataloader = DataLoader(
@@ -270,13 +286,7 @@ def main() -> int:
         lr=args.lr,
         inter_lr=args.lr,
         bfgs_lr=0.5,
-        leaf_dim=3,
-        num_leaves=self_structure.num_leaves,
-        leaf_entropy_weight=0.0,
-        mag_entropy_weight=0.0,
-        tau_start=1.0,
-        tau_end=1.0,
-        tau_schedule="non_decay",
+        expression_threshold=args.expression_threshold,
     )
 
     print(f"Device: {device}")
@@ -290,6 +300,7 @@ def main() -> int:
     score = train_network_fex(
         forcing_tree,
         interaction_tree,
+        dataloader,
         dataloader,
         adjacency,
         config,

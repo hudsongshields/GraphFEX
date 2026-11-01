@@ -1,4 +1,4 @@
-from ..utils.tree_configs import get_tree_config
+from ..helpers.tree_configs import get_tree_config
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -79,7 +79,11 @@ def fex_load_state_dict(fex, checkpoint, strict=True):
     if tree_name is not None and sample_indices is not None:
         fex.tree_structure = get_tree_config(tree_name)
         fex.sample_indices = sample_indices
-        fex.parent_node = fex.tree_structure.build_tree(sample_indices)
+        fex.leaf_mlps = nn.ModuleList()
+        fex.unary_ops = nn.ModuleList()
+        fex.binary_ops = nn.ModuleList()
+        raw_tree = fex.tree_structure.build_tree(sample_indices)
+        fex.parent_node = fex._register_tree(raw_tree)
         fex._normalize_leaf_unary_operations()
 
     tree_state = {k: v for k, v in state.items() if k.startswith("tree.")}
@@ -94,7 +98,7 @@ def fex_load_state_dict(fex, checkpoint, strict=True):
                 node_load_state_dict(fex.parent_node, tree_state, prefix="tree.")
         else:
             node_load_state_dict(fex.parent_node, tree_state, prefix="tree.")
-        fex._normalize_leaf_unary_operations()
+
 
     return result
 

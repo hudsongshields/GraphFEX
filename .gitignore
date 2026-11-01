@@ -24,4 +24,14 @@ HR/sigmoid_eval/
 HR/inter_test
 HR/sigmoid
 HR/default
-HR/logs1
+HR/logs*
+
+*.txt
+*.csv
+tests/
+
+Point-Vortex/
+Rossler-Dynamics/
+
+HR/data/HR_timeseries_BA_deg_10_0_SNR_40.csv
+C++ GraphFEX/

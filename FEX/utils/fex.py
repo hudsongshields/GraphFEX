@@ -1,0 +1,300 @@
+from FEX.helpers.pools import GraphPoolCandidate
+
+from ..training.train_controller import train_network_controller, train_controller
+from ..training.train_fex import train_network_fex, train_fex 
+from ..training.train_configs import FEXConfig, ControllerConfig
+from FEX.helpers.tree_configs import *
+from ..models.learnable_tree import FEX
+
+
+import torch
+import torch.nn.functional as F
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.model_selection import train_test_split
+
+class CoupledFEX():
+    def __init__(self, self_fex_struct, inter_fex_struct, target_dim, *, 
+            controller_lr=0.005, controller_epochs=200, cands_per_cycle=10, controller_threshold=0.4, poolsize=10, epsilon_greedy=0.2,
+            num_fex_epochs=80, bfgs_epochs=20, self_lr=0.2, inter_lr=0.2, bfgs_lr=0.5, 
+            finetune_epochs=2000, finetune_lr=2e-2, expression_threshold=0.001,
+            device='cpu'
+        ):
+        self.self_fex_struct = get_tree_config(self_fex_struct)
+        self.inter_fex_struct = get_tree_config(inter_fex_struct)
+        self.finetune_epochs = finetune_epochs
+        self.finetune_lr = finetune_lr
+        
+        self.fex_config = FEXConfig(
+            target_dim=target_dim,
+            lr=self_lr,
+            inter_lr=inter_lr,
+            num_epochs=num_fex_epochs,
+            bfgs_epochs=bfgs_epochs,
+            bfgs_lr=bfgs_lr,
+            expression_threshold=expression_threshold,
+
+        )
+        self.controller_config = ControllerConfig(
+            lr=controller_lr,
+            num_epochs=controller_epochs,
+            num_cands_per_epoch=cands_per_cycle,
+            percentile_threshold=controller_threshold,
+            poolsize=poolsize,
+            epsilon_greedy=epsilon_greedy,
+        )
+
+        self.best_model = None
+        self.device=device
+
+    def to(self, device):
+        self.device = device
+        if self.best_model is not None:
+            self.best_model.forcing_tree.to(device)
+            self.best_model.inter_tree.to(device)
+            self.best_model.inter_tree.to(device)
+        return self
+
+
+    def init(self, fex_ops, inter_ops, leaf_dim):
+        fex_tree = FEX(leaf_dim=leaf_dim, sample_indices=fex_ops, tree_structure=self.self_fex_struct, expression_threshold=self.fex_config.expression_threshold).to(self.device)
+        inter_tree = FEX(leaf_dim=leaf_dim*2, sample_indices=inter_ops, tree_structure=self.inter_fex_struct, expression_threshold=self.fex_config.expression_threshold).to(self.device)
+        self.best_model = GraphPoolCandidate(id=0,forcing_tree=fex_tree, inter_tree=inter_tree, reward=100.0)
+
+
+
+    def fit(
+        self,
+        data,
+        target,
+        adjacency,
+        batch_size=64,
+        num_workers=2,
+        finetune_bs=128,
+        num_groups=1,
+        rbm_reweight=False,
+        grouping="random",
+        score_nodes=None,
+    ):
+        X_train, X_eval, y_train, y_eval = train_test_split(data, target, test_size=0.3, random_state=42)
+        dataloader = DataLoader(
+            TensorDataset(X_train, y_train),
+            batch_size=batch_size,
+            shuffle=True,
+            pin_memory=self.device == "cuda",
+        )
+        controller_eval_states, finetune_eval_states, controller_eval_target, finetune_eval_target = train_test_split(X_eval, y_eval, test_size=0.5, random_state=42)
+        controller_eval_loader = DataLoader(
+            TensorDataset(controller_eval_states, controller_eval_target),
+            batch_size=batch_size,
+            shuffle=False,
+            pin_memory=self.device == "cuda",
+        )
+        finetune_eval_loader = DataLoader(
+            TensorDataset(finetune_eval_states, finetune_eval_target),
+            batch_size=batch_size,
+            shuffle=False,
+            pin_memory=self.device == "cuda",
+        )
+        best_candidates = train_network_controller(
+            self.self_fex_struct,
+            self.inter_fex_struct,
+            dataloader, controller_eval_loader,
+            adjacency,
+            self.controller_config,
+            self.fex_config,
+            num_workers=num_workers,
+            num_groups=num_groups,
+            rbm_reweight=rbm_reweight,
+            grouping=grouping,
+            score_nodes=score_nodes,
+        )
+        self.fex_config.num_epochs = self.finetune_epochs
+        self.fex_config.lr = self.finetune_lr
+        self.fex_config.inter_lr = self.finetune_lr
+        self.fex_config.bfgs_epochs = 0
+        if finetune_bs:
+            dataloader= DataLoader(
+                TensorDataset(
+                    torch.cat([X_train, controller_eval_states]),
+                    torch.cat([y_train, controller_eval_target]),
+                ),
+                batch_size=finetune_bs,
+                shuffle=True,
+                pin_memory=self.device == "cuda",
+            )
+        for candidate in best_candidates:
+            forcing_tree = candidate.forcing_tree
+            inter_tree = candidate.inter_tree
+            for param in forcing_tree.parameters():
+                param.requires_grad = True
+            for param in inter_tree.parameters():
+                param.requires_grad = True
+            # forcing_tree.compile()
+            # inter_tree.compile()
+            loss = train_network_fex(forcing_tree, inter_tree, dataloader, finetune_eval_loader, adjacency, self.fex_config, verbose=True, log_every=100)
+            candidate.reward = 1 / (1 + loss)
+
+        self.best_model = max(best_candidates, key=lambda c: c.reward)
+
+    def finetune(self, data, target, adjacency, finetune_bs=64):
+        if self.best_model is None:
+            raise ValueError("No best model found. Please fit the model first.")
+
+        self.fex_config.num_epochs = self.finetune_epochs
+        self.fex_config.lr = self.finetune_lr
+        self.fex_config.inter_lr = self.finetune_lr
+        self.fex_config.bfgs_epochs = 0
+
+        dataloader = DataLoader(
+            TensorDataset(data, target),
+            batch_size=finetune_bs,
+            shuffle=True,
+            pin_memory=self.device == "cuda",
+        )
+
+        loss = train_network_fex(
+            self.best_model.forcing_tree,
+            self.best_model.inter_tree,
+            dataloader,
+            None,
+            adjacency,
+            self.fex_config,
+            verbose=True,
+            log_every=100
+        )
+        self.best_model.reward = 1 / (1 + loss)
+
+    
+    def predict(self, x, adjacency):
+        self_fex = self.best_model.forcing_tree.to(self.device)
+        inter_fex = self.best_model.inter_tree.to(self.device)
+
+        self_fex.eval()
+        inter_fex.eval()
+
+        x = x.to(self.device)
+        adjacency = adjacency.to(self.device)
+
+        with torch.no_grad():
+            predictions = self_fex(x).squeeze(-1)
+
+            self_nodes, neighbor_nodes = adjacency.nonzero(as_tuple=True)
+            interaction_mask = self_nodes != neighbor_nodes
+            self_nodes = self_nodes[interaction_mask]
+            neighbor_nodes = neighbor_nodes[interaction_mask]
+            edge_weights = adjacency[self_nodes, neighbor_nodes]
+
+            inter_input = torch.cat((x[self_nodes], x[neighbor_nodes]), dim=1)
+            inter_predictions = inter_fex(inter_input).squeeze(-1) * edge_weights
+            predictions.index_add_(0, self_nodes, inter_predictions)
+
+        return predictions.unsqueeze(-1)
+    
+    
+    def __str__(self):
+        return f"FEX(self_fex={self.best_model.forcing_tree} \ninter_fex={self.best_model.inter_tree})"
+    
+class SingleFEX():
+    def __init__(self, self_fex_struct: str, target_dim, *,
+            controller_lr=0.01, controller_epochs=200, cands_per_cycle=10, controller_threshold=0.4, poolsize=5, epsilon_greedy=0.2,
+            num_fex_epochs=60, self_lr=0.2, bfgs_epochs=20, bfgs_lr=0.4, 
+            num_finetune_epochs=2000, finetune_lr=0.02, expression_threshold=0.01,
+            device='cpu',
+        ):
+        self.self_fex_struct = get_tree_config(self_fex_struct)
+        self.fex_config = FEXConfig(
+            num_epochs=num_fex_epochs,
+            lr=self_lr,
+            bfgs_epochs=bfgs_epochs,
+            bfgs_lr=bfgs_lr,
+            target_dim=target_dim,
+            expression_threshold=expression_threshold,
+        )
+        self.controller_config = ControllerConfig(
+            lr=controller_lr,
+            num_epochs=controller_epochs,
+            num_cands_per_epoch=cands_per_cycle,
+            percentile_threshold=controller_threshold,
+            poolsize=poolsize,
+            epsilon_greedy=epsilon_greedy,
+        )
+        self.best_model = None
+        self.device=device
+        self.num_finetune_epochs = num_finetune_epochs
+        self.finetune_lr = finetune_lr
+
+    def to(self, device):
+        self.device = device
+        if self.best_model is not None:
+            self.best_model.tree.to(device)
+        return self
+
+    def fit(self, data, target, batch_size=64, num_workers=None):
+        dataloader = DataLoader(
+            TensorDataset(data, target),
+            batch_size=batch_size,
+            shuffle=True,
+            pin_memory=self.device == "cuda",
+        )
+        best_candidates = train_controller(self.self_fex_struct, dataloader, self.controller_config, self.fex_config, checkpoint_dir=None, num_workers=num_workers)
+
+        self.fex_config.num_epochs = self.num_finetune_epochs
+        self.fex_config.bfgs_epochs = 0
+        self.fex_config.lr = self.finetune_lr
+        self.fex_config.inter_lr = self.finetune_lr
+        for candidate in best_candidates:
+            self_fex = candidate.tree
+            for param in self_fex.parameters():
+                param.requires_grad = True
+            loss = train_fex(self_fex, dataloader, self.fex_config, self.device, every_n_epochs=100)
+            updated_reward = 1/(1 + loss)
+            candidate.reward = updated_reward
+        self.best_model = max(best_candidates, key=lambda c: c.reward)
+
+    def finetune(self, data, target, batch_size=64):
+        dataloader = DataLoader(
+            TensorDataset(data, target),
+            batch_size=batch_size,
+            shuffle=True,
+            pin_memory=self.device == "cuda",
+        )
+        self.fex_config.num_epochs = self.num_finetune_epochs
+        self.fex_config.bfgs_epochs = 0
+        self.fex_config.lr = self.finetune_lr
+        self.fex_config.inter_lr = self.finetune_lr
+        self_fex = self.best_model.tree
+        train_fex(self_fex, dataloader, self.fex_config, self.device, every_n_epochs=100)
+
+    def predict(self, x, adjacency=None):
+        x = x.to(self.device)
+        fex = self.best_model.tree.to(self.device)
+        fex.eval()
+        with torch.no_grad():
+            pred = fex(x)
+        return pred
+    
+    def __str__(self):
+        return f"FEX = {self.best_model.tree}"
+
+
+
+def simulate(fexs, x, adjacency, timesteps, dt):
+    """x must be a single state snapshot of shape (num_nodes, state_dim); each fex predicts one state dimension."""
+    device = x.device
+    for fex in fexs:
+        fex.to(device)
+
+    def derivative(state):
+        return torch.cat([fex.predict(state, adjacency) for fex in fexs], dim=-1)
+
+    predictions = [x]
+    derivatives = [derivative(x)]
+    for t in range(timesteps):
+        k1 = derivatives[-1]
+        k2 = derivative(x + 0.5 * dt * k1)
+        k3 = derivative(x + 0.5 * dt * k2)
+        k4 = derivative(x + dt * k3)
+        x = x + dt * (k1 + 2 * k2 + 2 * k3 + k4) / 6
+        predictions.append(x)
+        derivatives.append(derivative(x))
+    return torch.stack(predictions, dim=0), torch.stack(derivatives, dim=0)
