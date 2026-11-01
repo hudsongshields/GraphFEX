@@ -175,6 +175,7 @@ def main():
         help="Grouping strategy for coupled FEX training",
     )
     parser.add_argument(
+        "--num_groups",
         "--num-groups",
         type=int,
         default=1,
@@ -187,7 +188,7 @@ def main():
     if args.checkpoint:
         checkpoint = f'{args.experiment}_snr{args.snr}_dim{args.target_dim}'
     if args.num_groups < 1:
-        parser.error("--num-groups must be at least 1")
+        parser.error("--num_groups/--num-groups must be at least 1")
     if not 0 < args.test_size < 1:
         parser.error("--test_size must be between 0 and 1")
 
