@@ -66,7 +66,6 @@ def eval_candidate(k_cand, gpu_id, op_indices):
             grouping=grouping_global,
             score_nodes=score_nodes_global,
             device=device,
-            log_every=10
         )
     else:
         score = train_fex(

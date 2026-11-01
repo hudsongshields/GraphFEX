@@ -55,8 +55,8 @@ def total_loss(
         inter_edges = batch_x[:, adj_mat_edges, :]
         edge_inputs = torch.cat([inter_sources, inter_edges], dim=-1)
         inter_out = inter_tree(edge_inputs.reshape(B * num_edges, -1)).reshape(B, num_edges, 1)
-        # if edge_weights is not None:
-        #     inter_out = inter_out * edge_weights.view(1, num_edges, 1)
+        if edge_weights is not None:
+            inter_out = inter_out * edge_weights.view(1, num_edges, 1)
 
         if score_nodes is not None:
             global_to_local = torch.full((G,), -1, device=batch_x.device, dtype=torch.long)
