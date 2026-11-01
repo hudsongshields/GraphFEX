@@ -91,8 +91,35 @@ def kuramoto_fex_specs(device, args):
     }
 
 
-DATA_FNS = {"hr": hr_data, "lorenz": lorenz_data, "kuramoto": kuramoto_data}
-SPEC_FNS = {"hr": hr_fex_specs, "lorenz": lorenz_fex_specs, "kuramoto": kuramoto_fex_specs}
+def traffic_sensors_data(args):
+    from NumericalExperiments.TrafficSensors.generate_data import make_data
+
+    return make_data(timesteps=args.timesteps)
+
+
+def traffic_sensors_fex_specs(device, args):
+    return {
+        0: ("coupled", dict(
+            self_fex_struct="depth_2_tree_config", inter_fex_struct="depth_2_tree_config",
+            target_dim=0, controller_epochs=200, num_fex_epochs=80, finetune_epochs=5000,
+            finetune_lr=1e-4, self_lr=0.02, inter_lr=0.02, bfgs_epochs=20, bfgs_lr=0.5,
+            poolsize=8, device=device, expression_threshold=0.05,
+        ), dict(num_workers=args.num_workers, finetune_bs=512)),
+    }
+
+
+DATA_FNS = {
+    "hr": hr_data,
+    "lorenz": lorenz_data,
+    "kuramoto": kuramoto_data,
+    "traffic_sensors": traffic_sensors_data,
+}
+SPEC_FNS = {
+    "hr": hr_fex_specs,
+    "lorenz": lorenz_fex_specs,
+    "kuramoto": kuramoto_fex_specs,
+    "traffic_sensors": traffic_sensors_fex_specs,
+}
 
 
 def build_and_fit(
@@ -105,6 +132,7 @@ def build_and_fit(
     *,
     grouping="random",
     num_groups=1,
+    test_size=0.3,
 ):
     model_kwargs = dict(model_kwargs)
     if kind == "coupled":
@@ -118,6 +146,7 @@ def build_and_fit(
             adj_matrix,
             grouping=grouping,
             num_groups=num_groups,
+            test_size=test_size,
             **fit_kwargs,
         )
     else:
@@ -129,9 +158,14 @@ def build_and_fit(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--experiment", choices=["hr", "lorenz", "kuramoto"], required=True)
+    parser.add_argument(
+        "--experiment",
+        choices=["hr", "lorenz", "kuramoto", "traffic_sensors"],
+        required=True,
+    )
     parser.add_argument("--snr", type=float, default=None)
     parser.add_argument("--timesteps", type=int, default=5000)
+    parser.add_argument("--test_size", type=float, default=0.3)
     parser.add_argument("--target_dim", type=int, default=None, help="Only train a single dimension (default: all)")
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument(
@@ -154,6 +188,8 @@ def main():
         checkpoint = f'{args.experiment}_snr{args.snr}_dim{args.target_dim}'
     if args.num_groups < 1:
         parser.error("--num-groups must be at least 1")
+    if not 0 < args.test_size < 1:
+        parser.error("--test_size must be between 0 and 1")
 
     seed = 42
     random.seed(seed)
@@ -180,6 +216,7 @@ def main():
             adj_matrix,
             grouping=args.grouping,
             num_groups=args.num_groups,
+            test_size=args.test_size,
         )
         print_output = f"Dim {dim}: {models[dim]}"
         print(print_output)
