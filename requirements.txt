@@ -1,5 +1,6 @@
 coloredlogs
 graphviz
+h5py
 humanfriendly
 mplcyberpunk
 networkx

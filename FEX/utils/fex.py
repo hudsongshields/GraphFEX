@@ -74,8 +74,9 @@ class CoupledFEX():
         rbm_reweight=False,
         grouping="random",
         score_nodes=None,
+        test_size=0.3,
     ):
-        X_train, X_eval, y_train, y_eval = train_test_split(data, target, test_size=0.3, random_state=42)
+        X_train, X_eval, y_train, y_eval = train_test_split(data, target, test_size=test_size, random_state=42)
         dataloader = DataLoader(
             TensorDataset(X_train, y_train),
             batch_size=batch_size,
