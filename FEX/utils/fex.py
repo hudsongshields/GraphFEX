@@ -76,26 +76,33 @@ class CoupledFEX():
         score_nodes=None,
         test_size=0.3,
     ):
-        X_train, X_eval, y_train, y_eval = train_test_split(data, target, test_size=test_size, random_state=42)
+        if test_size > 0.0:
+            X_train, X_eval, y_train, y_eval = train_test_split(data, target, test_size=test_size, random_state=42)
+        else:
+            X_train, y_train = data, target
+            X_eval = y_eval = None
         dataloader = DataLoader(
             TensorDataset(X_train, y_train),
             batch_size=batch_size,
             shuffle=True,
             pin_memory=self.device == "cuda",
         )
-        controller_eval_states, finetune_eval_states, controller_eval_target, finetune_eval_target = train_test_split(X_eval, y_eval, test_size=0.5, random_state=42)
-        controller_eval_loader = DataLoader(
-            TensorDataset(controller_eval_states, controller_eval_target),
-            batch_size=batch_size,
-            shuffle=False,
-            pin_memory=self.device == "cuda",
-        )
-        finetune_eval_loader = DataLoader(
-            TensorDataset(finetune_eval_states, finetune_eval_target),
-            batch_size=batch_size,
-            shuffle=False,
-            pin_memory=self.device == "cuda",
-        )
+        controller_eval_loader = None
+        finetune_eval_loader = None
+        if X_eval is not None:
+            controller_eval_states, finetune_eval_states, controller_eval_target, finetune_eval_target = train_test_split(X_eval, y_eval, test_size=0.5, random_state=42)
+            controller_eval_loader = DataLoader(
+                TensorDataset(controller_eval_states, controller_eval_target),
+                batch_size=batch_size,
+                shuffle=False,
+                pin_memory=self.device == "cuda",
+            )
+            finetune_eval_loader = DataLoader(
+                TensorDataset(finetune_eval_states, finetune_eval_target),
+                batch_size=batch_size,
+                shuffle=False,
+                pin_memory=self.device == "cuda",
+            )
         best_candidates = train_network_controller(
             self.self_fex_struct,
             self.inter_fex_struct,
@@ -114,11 +121,13 @@ class CoupledFEX():
         self.fex_config.inter_lr = self.finetune_lr
         self.fex_config.bfgs_epochs = 0
         if finetune_bs:
+            if X_eval is not None:
+                finetune_states = torch.cat([X_train, controller_eval_states])
+                finetune_targets = torch.cat([y_train, controller_eval_target])
+            else:
+                finetune_states, finetune_targets = X_train, y_train
             dataloader= DataLoader(
-                TensorDataset(
-                    torch.cat([X_train, controller_eval_states]),
-                    torch.cat([y_train, controller_eval_target]),
-                ),
+                TensorDataset(finetune_states, finetune_targets),
                 batch_size=finetune_bs,
                 shuffle=True,
                 pin_memory=self.device == "cuda",

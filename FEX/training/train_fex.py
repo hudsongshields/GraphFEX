@@ -220,8 +220,9 @@ def train_network_fex(
     forcing_tree.eval()
     inter_dynam_tree.eval()
     final_pred_losses = []
+    score_loader = eval_loader if eval_loader is not None else dataloader
     with torch.no_grad():
-        for batch_x, batch_dy_val in eval_loader:
+        for batch_x, batch_dy_val in score_loader:
             batch_x = batch_x.to(device)
             batch_dy_val = batch_dy_val[:, :, config.target_dim:config.target_dim+1].to(device)
             final_pred_losses.append(
