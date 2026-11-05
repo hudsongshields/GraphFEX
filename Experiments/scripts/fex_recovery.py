@@ -94,7 +94,7 @@ def kuramoto_fex_specs(device, args):
 def traffic_sensors_data(args):
     from Experiments.data.TrafficSensors.generate_data import make_data
 
-    return make_data(timesteps=args.timesteps)
+    return make_data(timesteps=args.timesteps, smoothing=args.smoothing)
 
 
 def traffic_sensors_fex_specs(device, args):
@@ -165,6 +165,11 @@ def main():
     )
     parser.add_argument("--snr", type=float, default=None)
     parser.add_argument("--timesteps", type=int, default=5000)
+    parser.add_argument(
+        "--smoothing",
+        action="store_true",
+        help="Use smoothed finite differences for traffic_sensors derivatives",
+    )
     parser.add_argument("--test_size", type=float, default=0.3)
     parser.add_argument("--target_dim", type=int, default=None, help="Only train a single dimension (default: all)")
     parser.add_argument("--num_workers", type=int, default=1)

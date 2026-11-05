@@ -19,17 +19,22 @@ def make_data(
     data_dir: str | Path = DATA_DIR,
     dt: float = DEFAULT_DT,
     timesteps: int | None = None,
+    smoothing: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Load METR-LA speeds and return adjacency, speeds, and unsmoothed derivatives.
+    """Load METR-LA speeds and return adjacency, speeds, and derivatives.
 
     Speeds are in mph. With the default five-minute timestep, derivatives are in
-    mph per hour. The five-point derivative drops the first and last two samples.
+    mph per hour. The derivative drops the first and last two samples.
     If ``timesteps`` is set, only the first requested raw samples are returned.
+    If ``smoothing`` is True, a smoothed finite difference (Savitzky-Golay
+    window of 11) is used and the returned speeds are the smoothed speeds;
+    otherwise the unsmoothed five-point derivative is used.
     """
     if dt <= 0:
         raise ValueError("dt must be positive")
-    if timesteps is not None and timesteps < 5:
-        raise ValueError("timesteps must be at least 5 for the five-point derivative")
+    min_timesteps = 11 if smoothing else 5
+    if timesteps is not None and timesteps < min_timesteps:
+        raise ValueError(f"timesteps must be at least {min_timesteps} for the derivative")
 
     data_dir = Path(data_dir)
     with (data_dir / "adj_mx.pkl").open("rb") as adjacency_file:
@@ -61,6 +66,9 @@ def make_data(
 
     speeds = torch.as_tensor(speeds[:, [speed_indices[sensor_id] for sensor_id in sensor_ids]])
     speeds = speeds.to(dtype=torch.float32).unsqueeze(-1)
-    timeseries, derivatives = numerical_deriv.five_point(speeds, dt=dt)
+    if smoothing:
+        timeseries, derivatives = numerical_deriv.smoothed_five_point(speeds, dt=dt)
+    else:
+        timeseries, derivatives = numerical_deriv.five_point(speeds, dt=dt)
 
     return adjacency, timeseries, derivatives
