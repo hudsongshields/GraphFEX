@@ -44,10 +44,10 @@ def interaction_coefficients(model):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--snrs", default="none,30,40,50,60,70")
+    parser.add_argument("--snrs", default="none,30,37.5,45,52.5,60,67.5")
     parser.add_argument("--self-tree", default="depth_1_tree_config")
     parser.add_argument("--inter-tree", default="depth_1_tree_config")
-    parser.add_argument("--controller-epochs", type=int, default=8)
+    parser.add_argument("--controller-epochs", type=int, default=16)
     parser.add_argument("--cands", type=int, default=8)
     parser.add_argument("--fex-epochs", type=int, default=20)
     # This problem is badly conditioned (edge weights ~ h^-alpha, and u_j and
@@ -69,7 +69,7 @@ def main():
     script_dir = Path(__file__).parent
     out_path = script_dir / args.out
 
-    snrs = [None if s.lower() == "none" else int(s) for s in args.snrs.split(",")]
+    snrs = [None if s.lower() == "none" else float(s) for s in args.snrs.split(",")]
     results = []
     for snr in snrs:
         reseed(args.seed)

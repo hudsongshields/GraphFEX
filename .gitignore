@@ -28,6 +28,7 @@ HR/logs*
 
 *.txt
 *.csv
+*.json
 tests/
 test.ipynb
 

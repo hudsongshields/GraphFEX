@@ -14,7 +14,7 @@ def hr_data(args):
     from Experiments.data.HR.generate_data import make_static_sf_adjacency, make_timeseries
 
     adj_matrix = make_static_sf_adjacency(100, 500, gamma_in=3.5, gamma_out=3.5)
-    timeseries, t_derivs = make_timeseries(num_samples=args.timesteps, adjacency=adj_matrix, snr=args.snr)
+    timeseries, t_derivs = make_timeseries(num_samples=args.timesteps, adjacency=adj_matrix, snr=args.snr, smoothing=args.smoothing)
     return adj_matrix, timeseries, t_derivs
 
 
@@ -50,7 +50,7 @@ def lorenz_data(args):
     from Experiments.data.Lorenz.generate_data import make_adjacency, make_data
 
     adj_matrix = make_adjacency(100, 3)
-    timeseries, t_derivs = make_data(num_samples=args.timesteps, adjacency=adj_matrix, snr=args.snr, coupling=0.8, smoothing=False)
+    timeseries, t_derivs = make_data(num_samples=args.timesteps, adjacency=adj_matrix, snr=args.snr, coupling=0.8, smoothing=args.smoothing)
     return adj_matrix, timeseries, t_derivs
 
 
@@ -77,7 +77,7 @@ def kuramoto_data(args):
     from Experiments.data.Kuramoto.generate_data import make_arni_adjacency, make_data
 
     adj_matrix = make_arni_adjacency(100, 5)
-    timeseries, t_derivs = make_data(num_samples=args.timesteps, adjacency=adj_matrix, snr=args.snr, coupling=1.0)
+    timeseries, t_derivs = make_data(num_samples=args.timesteps, adjacency=adj_matrix, snr=args.snr, coupling=1.0, smoothing=args.smoothing)
     return adj_matrix, timeseries, t_derivs
 
 
@@ -167,8 +167,8 @@ def main():
     parser.add_argument("--timesteps", type=int, default=5000)
     parser.add_argument(
         "--smoothing",
-        action="store_true",
-        help="Use smoothed finite differences for traffic_sensors derivatives",
+        type=bool,
+        help="Use smoothed finite differences",
     )
     parser.add_argument("--test_size", type=float, default=0.3)
     parser.add_argument("--target_dim", type=int, default=None, help="Only train a single dimension (default: all)")
